@@ -1,0 +1,4 @@
+*.log
+*.go
+channels-ci.scm
+pi3-barebones-image

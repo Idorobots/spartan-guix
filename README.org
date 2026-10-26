@@ -1,1 +1,136 @@
 * Spartan Guix
+
+A GNU Guix channel for reusable packages, services and system images.
+It currently provides an AArch64 Raspberry Pi 3 baseline and a cross-build
+fix for the filesystem tools used by Guix's root-resize service.
+
+** Using the channel
+
+The channel name is =spartan-guix=, the branch is =main=, and the public URL is
+=https://github.com/Idorobots/spartan-guix=. Nonguix is declared as a dependency
+in =.guix-channel= because the Raspberry Pi setup uses its kernel and firmware.
+
+Add this entry alongside Guix in the consumer's channel configuration:
+
+#+begin_src scheme
+(channel
+ (name 'spartan-guix)
+ (url "https://github.com/Idorobots/spartan-guix")
+ (branch "main")
+ (commit "REPLACE-WITH-PUBLISHED-COMMIT"))
+#+end_src
+
+Guix resolves Nonguix automatically from =.guix-channel=. The consumer owns its
+Guix version and complete deployment lock. After installing the consumer's
+channel configuration, save the resolved revisions in that repository:
+
+#+begin_src sh
+guix describe -f channels > channels-lock.scm
+guix time-machine -C channels-lock.scm -- system image \
+  --target=aarch64-linux-gnu --image-type=rpi-raw \
+  -e '(@ (gnu system images raspberrypi) rpi3-barebones-os)'
+#+end_src
+
+This channel repository declares runtime dependencies only in =.guix-channel=.
+Its tested Guix revision is selected separately in =ci/channels.scm=.
+
+** Raspberry Pi
+
+=(gnu system images raspberrypi)= exports:
+
+- =rpi-image-type=: discoverable as =rpi-raw= in an installed channel profile.
+- =rpi3-barebones-os= and =rpi3-barebones-raw-image=.
+- =%rpi-root-file-system=, =%rpi-boot-file-system= and
+  =%rpi-resize-file-system-service= for compatible host configurations.
+
+The Pi 3 OS includes the firmware -> U-Boot EFI -> GRUB boot chain, an ARM64
+kernel and firmware, DHCP, NTP and stock root filesystem resizing. The image
+uses MBR, a 256 MiB FAT32 =PIBOOT= partition mounted at =/boot/firmware=, and a
+persistent ext4 =Guix= root partition last on the card. Its initializer copies
+the complete bootloader profile and redirects GRUB to the root filesystem.
+
+With the channel and its dependencies installed, build the working-tree image:
+
+#+begin_src sh
+guix system image -L . --target=aarch64-linux-gnu --root=pi3-barebones-image \
+  gnu/system/images/raspberrypi.scm
+#+end_src
+
+An individual host can extend the baseline:
+
+#+begin_src scheme
+(use-modules (gnu) (gnu system images raspberrypi))
+
+(operating-system
+ (inherit rpi3-barebones-os)
+ (host-name "my-pi"))
+#+end_src
+
+Host-specific SSH authorization, signing trust, applications and runtime Wi-Fi
+configuration belong in consumer repositories. The barebones image includes
+no SSH service or management keys. Pi 3 Model B is the initial target; actual
+board boot and root expansion still need hardware validation. Pi 4/5 boot
+support is not established by the reusable partition layout.
+
+** Packages
+
+=(spartan packages file-systems)= exports =bcachefs-tools/cross-fixed=.
+The pinned Guix revision contains a malformed native helper input when
+cross-compiling =bcachefs-tools=. This variant supplies the input label and
+preserves native builds. The Raspberry Pi resize service selects it even
+though the root filesystem is ext4. Remove the variant when updating to a
+Guix revision that fixes the input.
+
+Package definitions live under =spartan/packages/=, reusable service modules
+under =spartan/services/= as they are added, and image types in Guix's standard
+=gnu/system/images/= discovery namespace. File paths and module names match.
+
+** Development and tests
+
+With GNU Make and the channel's dependencies installed, run from this repository
+root:
+
+#+begin_src sh
+make check check-image
+#+end_src
+
+=make check= runs every =tests/*.scm= SRFI-64 suite. These exercise service
+graphs, partition layout and mounts, root resizing, the real boot initializer,
+the 64-bit firmware override, and native/cross package inputs.
+=make check-image= lowers the AArch64 image derivation without building a kernel
+or SD image. Override =TARGET= to evaluate another cross target where supported.
+
+For a Guix matching CI's revision, with a separate pinned Nonguix checkout:
+
+#+begin_src sh
+make check check-image GUIX_LOAD_FLAGS='-L /absolute/path/to/nonguix'
+#+end_src
+
+To test the committed checkout as an installed channel, including Guix's real
+named-image discovery:
+
+#+begin_src sh
+SPARTAN_GUIX_COMMIT="$(git rev-parse HEAD)" \
+  guix repl ci/channels.scm > channels-ci.scm
+make check check-image check-discovery \
+  GUIX='guix time-machine -C channels-ci.scm --'
+#+end_src
+
+=ci/channels.scm= emits a channel list containing the tested Guix revision and
+a local Git URL at the exact commit from =SPARTAN_GUIX_COMMIT= or =GITHUB_SHA=.
+Guix resolves runtime dependencies from the committed =.guix-channel=.
+The generated file works with Guix's isolated channel evaluator. Commit the
+channel changes before using this bootstrap; it loads committed source.
+The ordinary =check= and =check-image= targets exercise working-tree source
+through =-L .=.
+
+GitHub Actions runs this real-channel bootstrap, all regression tests, the
+cross-build graph and named discovery on pushes to =main=, pull requests and
+manual dispatch. Actions are commit-pinned, with Dependabot updates enabled.
+CI evaluation is separate from a full image build and hardware boot testing.
+
+When contributing packages, include source hashes and package license metadata,
+add meaningful checks under =tests/=, and run =guix lint= for the new package.
+When changing upstream revisions, update CI's Guix pin in =ci/channels.scm=
+and the runtime dependency revisions in =.guix-channel= as needed, then run all
+checks. Deployment locks belong in consumer repositories.
