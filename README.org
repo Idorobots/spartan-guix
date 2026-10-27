@@ -1,8 +1,8 @@
 * Spartan Guix
 
 A GNU Guix channel for reusable packages, services and system images.
-It currently provides an AArch64 Raspberry Pi 3 baseline and a cross-build
-fix for the filesystem tools used by Guix's root-resize service.
+It currently provides an AArch64 Raspberry Pi 3 baseline and a reusable
+filesystem resize service with filesystem-specific build dependencies.
 
 ** Using the channel
 
@@ -44,7 +44,7 @@ Its tested Guix revision is selected separately in =ci/channels.scm=.
   =%rpi-resize-file-system-service= for compatible host configurations.
 
 The Pi 3 OS includes the firmware -> U-Boot EFI -> GRUB boot chain, an ARM64
-kernel and firmware, DHCP, NTP and stock root filesystem resizing. The image
+kernel and firmware, DHCP, NTP and automatic root filesystem resizing. The image
 uses MBR, a 256 MiB FAT32 =PIBOOT= partition mounted at =/boot/firmware=, and a
 persistent ext4 =Guix= root partition last on the card. Its initializer copies
 the complete bootloader profile and redirects GRUB to the root filesystem.
@@ -72,20 +72,62 @@ no SSH service or management keys. Pi 3 Model B is the initial target; actual
 board boot and root expansion still need hardware validation. Pi 4/5 boot
 support is not established by the reusable partition layout.
 
-** Packages
+** Filesystem resizing
 
-=(spartan packages file-systems)= exports =bcachefs-tools/cross-fixed=.
-The pinned Guix revision contains a malformed native helper input when
-cross-compiling =bcachefs-tools=. This variant supplies the input label and
-preserves native builds. The Raspberry Pi resize service selects it even
-though the root filesystem is ext4. Remove the variant when updating to a
-Guix revision that fixes the input.
+=(spartan services file-systems)= provides =resize-file-system-service-type=
+and =resize-file-system-configuration= for any Guix System host using a plain
+disk partition. It grows the partition with =growpart=, then grows the
+filesystem. Device paths, filesystem labels and UUIDs are resolved through
+Guix's filesystem helpers; the parent disk and partition number come from
+Linux sysfs rather than device-name assumptions.
+
+For example, add a service for a filesystem already declared in the host's
+=file-systems= field:
+
+#+begin_src scheme
+(use-modules (gnu services)
+             (gnu system file-systems)
+             (spartan services file-systems))
+
+(define data-file-system
+  (file-system
+   (device (file-system-label "data"))
+   (mount-point "/data")
+   (type "ext4")))
+
+(service resize-file-system-service-type
+         (resize-file-system-configuration
+          (file-system data-file-system)))
+#+end_src
+
+The configured filesystem selects the tool at configuration generation time:
+
+- =ext2=, =ext3= and =ext4=: =resize2fs= from =e2fsprogs=.
+- =btrfs=: =btrfs filesystem resize max= on the configured mount point.
+- =bcachefs=: =bcachefs device resize= on the resolved partition.
+
+Only the selected tool and =cloud-utils= enter the generated service's build
+graph. In particular, the Pi's ext4 root does not require bcachefs, Rust or
+Clang through resizing. The =cloud-utils=, =e2fsprogs=, =btrfs-progs= and
+=bcachefs-tools= configuration fields accept replacement tool packages.
+Unsupported filesystem types fail during service generation.
+
+Each instance has a mount-point-specific Shepherd provision, so a host can
+configure several filesystems. The service runs once after =user-processes=,
+when filesystems are mounted. A =growpart= NOCHANGE result still runs the
+filesystem resizer, allowing a later boot to recover from an interrupted
+resize. Other partition-growth errors and filesystem-resize errors propagate.
+Partitions can grow only into adjacent free space; the Pi image deliberately
+places its root partition last. This service does not manage LVM volumes or
+multi-device filesystems.
+
+** Module layout
 
 Reusable modules live under =modules/=, selected by the =directory= field in
 =.guix-channel=. Only this tree is compiled when installing the channel; CI
 scripts and executable tests remain outside it.
-Package definitions live under =modules/spartan/packages/=, reusable service
-modules under =modules/spartan/services/= as they are added, and image types
+Reusable service modules live under =modules/spartan/services/=, runtime
+helpers under =modules/spartan/build/=, and image types
 under =modules/gnu/system/images/= in Guix's standard discovery namespace.
 Paths relative to =modules/= match the Scheme module names.
 
@@ -100,7 +142,9 @@ make check check-image
 
 =make check= runs every =tests/*.scm= SRFI-64 suite. These exercise service
 graphs, partition layout and mounts, root resizing, the real boot initializer,
-the 64-bit firmware override, and native/cross package inputs.
+the 64-bit firmware override, resize command execution and filesystem-specific
+tool dependencies. Resize tests use a synthetic sysfs tree and harmless
+commands, requiring no block devices or root privileges.
 =make check-image= lowers the AArch64 image derivation without building a kernel
 or SD image. Override =TARGET= to evaluate another cross target where supported.
 

@@ -5,7 +5,6 @@
   #:use-module (gnu packages bootloaders)
   #:use-module (gnu packages raspberry-pi)
   #:use-module (gnu services)
-  #:use-module (gnu services admin)
   #:use-module (gnu services base)
   #:use-module (gnu services networking)
   #:use-module (gnu system)
@@ -14,7 +13,7 @@
   #:use-module (guix gexp)
   #:use-module (guix platforms arm)
   #:use-module (nongnu packages linux)
-  #:use-module (spartan packages file-systems)
+  #:use-module (spartan services file-systems)
   #:export (%rpi-root-file-system
             %rpi-boot-file-system
             %rpi-resize-file-system-service
@@ -45,8 +44,7 @@
   ;; Hosts include this service for both initial boot and later guix deploys.
   (service resize-file-system-service-type
            (resize-file-system-configuration
-            (file-system %rpi-root-file-system)
-            (bcachefs-tools bcachefs-tools/cross-fixed))))
+            (file-system %rpi-root-file-system))))
 
 (define rpi-custom-config
   ;; Guix's config.txt includes this last, overriding its load-time choice

@@ -32,7 +32,7 @@ jobs:
         run: guix repl ci/channels.scm > channels-ci.scm
       - name: Bootstrap pinned dependencies and this exact channel commit
         run: guix time-machine -C channels-ci.scm -- describe -f channels
-      - name: Run package and Raspberry Pi regression tests
+      - name: Run filesystem service and Raspberry Pi regression tests
         run: make check GUIX='guix time-machine -C channels-ci.scm --'
       - name: Evaluate AArch64 cross-build and named image discovery
         run: make check-image check-discovery GUIX='guix time-machine -C channels-ci.scm --'

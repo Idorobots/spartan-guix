@@ -1,7 +1,6 @@
 (use-modules (gnu)
              (gnu image)
              (gnu packages raspberry-pi)
-             (gnu services admin)
              (gnu services networking)
              (gnu services ssh)
              (gnu system image)
@@ -10,6 +9,7 @@
              (guix gexp)
              (guix packages)
              (ice-9 textual-ports)
+             (spartan services file-systems)
              (srfi srfi-1)
              (srfi srfi-64))
 
@@ -74,7 +74,7 @@
    (lambda (system)
      (let* ((config (service-value
                      (service-of-type system resize-file-system-service-type)))
-            (fs ((@@ (gnu services admin) resize-file-system-file-system) config)))
+            (fs (resize-file-system-configuration-file-system config)))
        (and (string=? "/" (file-system-mount-point fs))
             (string=? "ext4" (file-system-type fs))
             (equal? (file-system-device fs)
