@@ -1,4 +1,5 @@
 (use-modules (gnu)
+             (gnu bootloader u-boot)
              (gnu image)
              (gnu packages raspberry-pi)
              (gnu services networking)
@@ -9,6 +10,7 @@
              (guix gexp)
              (guix packages)
              (ice-9 textual-ports)
+             (spartan bootloader raspberrypi)
              (spartan services file-systems)
              (srfi srfi-1)
              (srfi srfi-64))
@@ -87,7 +89,69 @@
   (and (string-suffix? "include custom.txt\n" (plain-file-content %raspi-config-txt))
        (string=? "arm_64bit=1\n"
                  (plain-file-content
-                  (@@ (gnu system images raspberrypi) rpi-custom-config)))))
+                   (@@ (spartan bootloader raspberrypi) rpi-custom-config)))))
+
+(define boot-config (operating-system-bootloader rpi3-barebones-os))
+(define pi-bootloader (bootloader-configuration-bootloader boot-config))
+
+(test-assert "Pi bootloader uses Guix's Extlinux generator and file-based installation"
+  (and (eq? pi-bootloader u-boot-rpi-arm64-bootloader)
+       (eq? (bootloader-configuration-file-generator pi-bootloader)
+            (bootloader-configuration-file-generator u-boot-bootloader))
+       (string=? "/boot/extlinux/extlinux.conf"
+                 (bootloader-configuration-file pi-bootloader))
+       (equal? '("/boot/firmware") (bootloader-configuration-targets boot-config))
+       (not (bootloader-disk-image-installer pi-bootloader))))
+
+;; Execute the selected generator with distinct generation paths. Only the
+;; output filename needs approximation; no store or kernel build is required.
+(define config-output (make-parameter #f))
+(define (*approximate*) (config-output))
+(define (expand-gexps value)
+  ;; The approximation helper leaves spliced lists of gexps unexpanded.
+  (cond ((gexp? value) (expand-gexps (gexp->approximate-sexp value)))
+        ((pair? value) (map expand-gexps value))
+        (else value)))
+(define extlinux-text
+  (let* ((directory (mkdtemp "/tmp/spartan-extlinux-test-XXXXXX"))
+         (file (string-append directory "/extlinux.conf"))
+         (generate (bootloader-configuration-file-generator pi-bootloader))
+         (config (generate
+                  boot-config
+                  (list (menu-entry
+                         (label "current")
+                         (linux "/gnu/store/current-kernel/Image")
+                         (initrd "/gnu/store/current-initrd/initrd")
+                         (linux-arguments '("root=LABEL=Guix" "--system=/gnu/store/current-system"))))
+                  #:old-entries
+                  (list (menu-entry
+                         (label "previous")
+                         (linux "/gnu/store/previous-kernel/Image")
+                         (initrd "/gnu/store/previous-initrd/initrd")
+                         (linux-arguments '("root=LABEL=Guix" "--system=/gnu/store/previous-system")))))))
+    (dynamic-wind
+      (const #t)
+      (lambda ()
+        (parameterize ((config-output file))
+          (eval (expand-gexps (computed-file-gexp config)) (current-module)))
+        (call-with-input-file file get-string-all))
+      (lambda () (delete-file-recursively directory)))))
+
+(test-assert "Extlinux loads the current kernel, initrd, arguments and matching DTB directory"
+  (every (lambda (line) (string-contains extlinux-text line))
+         '("LABEL current\n"
+           "KERNEL /gnu/store/current-kernel/Image\n"
+           "INITRD /gnu/store/current-initrd/initrd\n"
+           "FDTDIR /gnu/store/current-kernel/lib/dtbs\n"
+           "APPEND root=LABEL=Guix --system=/gnu/store/current-system\n")))
+
+(test-assert "Extlinux retains the previous generation's own kernel and initrd"
+  (every (lambda (line) (string-contains extlinux-text line))
+         '("LABEL previous\n"
+           "KERNEL /gnu/store/previous-kernel/Image\n"
+           "INITRD /gnu/store/previous-initrd/initrd\n"
+           "FDTDIR /gnu/store/previous-kernel/lib/dtbs\n"
+           "APPEND root=LABEL=Guix --system=/gnu/store/previous-system\n")))
 
 (test-equal "Wi-Fi-capable kernel is selected" "linux-arm64-generic"
   (package-name (operating-system-kernel rpi3-barebones-os)))
@@ -98,28 +162,56 @@
 
 ;; Execute the real initializer without a daemon or a disk image. Firmware
 ;; symlinks must become regular files because the boot partition is FAT.
-(test-assert "boot initializer dereferences the profile and finds root GRUB config"
+(test-assert "image initializer materializes firmware, U-Boot and nested symlinks for FAT"
   (let* ((directory (mkdtemp "/tmp/spartan-rpi-test-XXXXXX"))
          (profile (string-append directory "/profile"))
          (boot (string-append directory "/boot"))
          (payload (string-append directory "/firmware")))
     (dynamic-wind
       (lambda ()
-        (mkdir profile)
-        (call-with-output-file payload (lambda (port) (display "firmware" port)))
-        (symlink payload (string-append profile "/start.elf")))
+         (mkdir profile)
+         (mkdir (string-append profile "/overlays"))
+         (call-with-output-file payload (lambda (port) (display "firmware" port)))
+         (for-each (lambda (name) (symlink payload (string-append profile name)))
+                   '("/start.elf" "/u-boot.bin" "/overlays/test.dtbo")))
       (lambda ()
         (let ((initialize
                (eval (gexp->approximate-sexp
                       (partition-initializer (car (image-partitions img))))
                      (current-module))))
           (initialize boot #:bootloader-package profile)
-          (and (eq? 'regular (stat:type (lstat (string-append boot "/start.elf"))))
-               (string-contains
-                (call-with-input-file (string-append boot "/efi/boot/grub.cfg")
-                  get-string-all)
-                "search --label --set=root Guix\nconfigfile /boot/grub/grub.cfg"))))
+           (every (lambda (name)
+                    (let ((file (string-append boot name)))
+                      (and (eq? 'regular (stat:type (lstat file)))
+                           (string=? "firmware" (call-with-input-file file get-string-all)))))
+                  '("/start.elf" "/u-boot.bin" "/overlays/test.dtbo"))))
       (lambda () (delete-file-recursively directory)))))
+
+(test-assert "deployment installer refreshes boot files under the installation root"
+  (let* ((directory (mkdtemp "/tmp/spartan-boot-install-test-XXXXXX"))
+         (source (string-append directory "/source"))
+         (mount-point (string-append directory "/system"))
+         (target "/boot/firmware")
+         (installed (string-append mount-point target "/u-boot.bin"))
+         (install (eval (gexp->approximate-sexp (bootloader-installer pi-bootloader))
+                        (current-module))))
+    (dynamic-wind
+      (lambda ()
+        (mkdir source)
+        (mkdir-p (string-append mount-point target))
+        (call-with-output-file (string-append source "/u-boot.bin")
+          (lambda (port) (display "updated U-Boot" port)))
+        (call-with-output-file installed (lambda (port) (display "old U-Boot" port))))
+      (lambda ()
+        (install source target mount-point)
+        (string=? "updated U-Boot" (call-with-input-file installed get-string-all)))
+      (lambda () (delete-file-recursively directory)))))
+
+(test-assert "root-image initialization leaves firmware copying to the FAT initializer"
+  (let ((install (eval (gexp->approximate-sexp (bootloader-installer pi-bootloader))
+                       (current-module))))
+    (install "/nonexistent-boot-files" #f "/nonexistent-root")
+    #t))
 
 (define runner (test-runner-current))
 (test-end "raspberrypi")

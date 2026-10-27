@@ -1,9 +1,6 @@
 (define-module (gnu system images raspberrypi)
   #:use-module (gnu bootloader)
-  #:use-module (gnu bootloader grub)
   #:use-module (gnu image)
-  #:use-module (gnu packages bootloaders)
-  #:use-module (gnu packages raspberry-pi)
   #:use-module (gnu services)
   #:use-module (gnu services base)
   #:use-module (gnu services networking)
@@ -13,6 +10,7 @@
   #:use-module (guix gexp)
   #:use-module (guix platforms arm)
   #:use-module (nongnu packages linux)
+  #:use-module (spartan bootloader raspberrypi)
   #:use-module (spartan packages ntp)
   #:use-module (spartan services file-systems)
   #:export (%rpi-root-file-system
@@ -47,21 +45,6 @@
            (resize-file-system-configuration
             (file-system %rpi-root-file-system))))
 
-(define rpi-custom-config
-  ;; Guix's config.txt includes this last, overriding its load-time choice
-  ;; of ARM mode when evaluated on an x86 build machine.
-  (raspi-custom-txt '("arm_64bit=1")))
-
-(define rpi3-bootloader
-  ;; The upstream chain is a blueprint without firmware or device trees.
-  (efi-bootloader-chain
-   grub-efi-netboot-removable-bootloader
-   #:packages (list u-boot-rpi-arm64-efi-bin raspberrypi-firmware)
-   #:files (list %raspi-config-txt
-                 %raspi-bcm27-dtb-txt
-                 %raspi-u-boot-bootloader-txt
-                 rpi-custom-config)))
-
 (define rpi3-barebones-os
   (operating-system
    (host-name "raspberrypi3")
@@ -72,7 +55,7 @@
    (initrd-modules '())
    (bootloader
     (bootloader-configuration
-     (bootloader rpi3-bootloader)
+     (bootloader u-boot-rpi-arm64-bootloader)
      (targets (list (file-system-mount-point %rpi-boot-file-system)))))
    (file-systems
     (append (list %rpi-root-file-system %rpi-boot-file-system)
@@ -86,18 +69,9 @@
            %base-services))))
 
 (define initialize-rpi-boot-partition
-  ;; The generic ESP initializer installs GRUB alone. This partition needs the
-  ;; complete firmware/U-Boot/GRUB profile supplied by the system bootloader.
+  ;; Firmware and U-Boot live on FAT. Guix installs extlinux.conf on root.
   #~(lambda* (root #:key bootloader-package #:allow-other-keys)
-      (mkdir-p root)
-      (copy-recursively bootloader-package root #:follow-symlinks? #t)
-      (mkdir-p (string-append root "/efi/boot"))
-      (call-with-output-file (string-append root "/efi/boot/grub.cfg")
-        (lambda (port)
-          (display #$(string-append "search --label --set=root "
-                                   %rpi-root-label
-                                   "\nconfigfile /boot/grub/grub.cfg\n")
-                   port)))))
+      (#$install-rpi-boot-files bootloader-package root)))
 
 (define rpi-image-type
   (image-type
@@ -133,5 +107,4 @@
                         #:type rpi-image-type))
    (name 'rpi3-barebones-raw-image)))
 
-;; Like Guix's board image modules, this file can be built directly.
 rpi3-barebones-raw-image
