@@ -1,14 +1,8 @@
 * Spartan Guix
 
 A GNU Guix channel for reusable packages, services and system images.
-It currently provides an AArch64 Raspberry Pi 3 baseline and a reusable
-filesystem resize service with filesystem-specific build dependencies.
 
 ** Using the channel
-
-The channel name is =spartan-guix=, the branch is =main=, and the public URL is
-=https://github.com/Idorobots/spartan-guix=. Nonguix is declared as a dependency
-in =.guix-channel= because the Raspberry Pi setup uses its kernel and firmware.
 
 Add this entry alongside Guix in the consumer's channel configuration:
 
@@ -16,23 +10,8 @@ Add this entry alongside Guix in the consumer's channel configuration:
 (channel
  (name 'spartan-guix)
  (url "https://github.com/Idorobots/spartan-guix")
- (branch "main")
  (commit "REPLACE-WITH-PUBLISHED-COMMIT"))
 #+end_src
-
-Guix resolves Nonguix automatically from =.guix-channel=. The consumer owns its
-Guix version and complete deployment lock. After installing the consumer's
-channel configuration, save the resolved revisions in that repository:
-
-#+begin_src sh
-guix describe -f channels > channels-lock.scm
-guix time-machine -C channels-lock.scm -- system image \
-  --target=aarch64-linux-gnu --image-type=rpi-raw \
-  -e '(@ (gnu system images raspberrypi) rpi3-barebones-os)'
-#+end_src
-
-This channel repository declares runtime dependencies only in =.guix-channel=.
-Its tested Guix revision is selected separately in =ci/channels.scm=.
 
 ** Raspberry Pi
 
@@ -43,18 +22,21 @@ Its tested Guix revision is selected separately in =ci/channels.scm=.
 - =%rpi-root-file-system=, =%rpi-boot-file-system= and
   =%rpi-resize-file-system-service= for compatible host configurations.
 
-The Pi 3 OS includes the firmware -> U-Boot EFI -> GRUB boot chain, an ARM64
+The Pi 3 OS includes the firmware -> U-Boot -> Linux boot chain, an ARM64
 kernel and firmware, DHCP, OpenNTPD clock synchronization and automatic root
-filesystem resizing. OpenNTPD uses Guix's default server pool and avoids the
-reference NTP package's Perl SSL helper dependencies when cross-compiling. The image
+filesystem resizing. OpenNTPD uses Guix's default server pool. The image
 uses MBR, a 256 MiB FAT32 =PIBOOT= partition mounted at =/boot/firmware=, and a
-persistent ext4 =Guix= root partition last on the card. Its initializer copies
-the complete bootloader profile and redirects GRUB to the root filesystem.
+persistent ext4 =Guix= root partition last on the card.
 
-The =openntpd/cross-fixed= variant in =(spartan packages ntp)= selects the native
-shell for OpenNTPD's bootstrap script and excludes raw OpenBSD headers from the
-cross compiler's include path, correcting two cross-build issues in the pinned
-Guix revision.
+=(spartan bootloader raspberrypi)= provides =u-boot-rpi-arm64-bootloader=.
+The FAT initializer and deployment installer share a file-copy routine for
+firmware, device trees, =u-boot.bin= and firmware configuration, dereferencing
+symlinks for FAT. The Pi firmware loads U-Boot from this partition rather than
+raw sectors. U-Boot's standard boot discovery reads
+=/boot/extlinux/extlinux.conf= from the root filesystem and loads the selected
+kernel and initrd directly. Guix's existing Extlinux generator supplies kernel
+arguments, matching kernel device-tree directories and previous generations;
+Guix installs the configuration atomically during updates.
 
 With the channel and its dependencies installed, build the working-tree image:
 
@@ -62,22 +44,6 @@ With the channel and its dependencies installed, build the working-tree image:
 guix system image -L modules --target=aarch64-linux-gnu --root=pi3-barebones-image \
   modules/gnu/system/images/raspberrypi.scm
 #+end_src
-
-An individual host can extend the baseline:
-
-#+begin_src scheme
-(use-modules (gnu) (gnu system images raspberrypi))
-
-(operating-system
- (inherit rpi3-barebones-os)
- (host-name "my-pi"))
-#+end_src
-
-Host-specific SSH authorization, signing trust, applications and runtime Wi-Fi
-configuration belong in consumer repositories. The barebones image includes
-no SSH service or management keys. Pi 3 Model B is the initial target; actual
-board boot and root expansion still need hardware validation. Pi 4/5 boot
-support is not established by the reusable partition layout.
 
 ** Filesystem resizing
 
@@ -113,12 +79,6 @@ The configured filesystem selects the tool at configuration generation time:
 - =btrfs=: =btrfs filesystem resize max= on the configured mount point.
 - =bcachefs=: =bcachefs device resize= on the resolved partition.
 
-Only the selected tool and =cloud-utils= enter the generated service's build
-graph. In particular, the Pi's ext4 root does not require bcachefs, Rust or
-Clang through resizing. The =cloud-utils=, =e2fsprogs=, =btrfs-progs= and
-=bcachefs-tools= configuration fields accept replacement tool packages.
-Unsupported filesystem types fail during service generation.
-
 Each instance has a mount-point-specific Shepherd provision, so a host can
 configure several filesystems. The service runs once after =user-processes=,
 when filesystems are mounted. A =growpart= NOCHANGE result still runs the
@@ -128,15 +88,72 @@ Partitions can grow only into adjacent free space; the Pi image deliberately
 places its root partition last. This service does not manage LVM volumes or
 multi-device filesystems.
 
-** Module layout
+** Cross-compilation fixes and workarounds
 
-Reusable modules live under =modules/=, selected by the =directory= field in
-=.guix-channel=. Only this tree is compiled when installing the channel; CI
-scripts and executable tests remain outside it.
-Reusable service modules live under =modules/spartan/services/=, runtime
-helpers under =modules/spartan/build/=, and image types
-under =modules/gnu/system/images/= in Guix's standard discovery namespace.
-Paths relative to =modules/= match the Scheme module names.
+The supported cross-build workflow uses =--target=aarch64-linux-gnu= on an
+x86-64 build machine. Some packages required workaround to make cross-compilation
+possible.
+
+*** Modules
+
+1. *Time service: select OpenNTPD instead of reference NTP.*
+   =modules/gnu/system/images/raspberrypi.scm= uses =openntpd-service-type=
+   with Guix's default server pool. Reference =ntp= brings in Perl SSL helper
+   dependencies through =update-leap=. Its =perl-net-ssleay= cross-build tried
+   to execute the target OpenSSL and failed; the pinned Perl cross-build also
+   assumes no XS extensions. The channel avoids this dependency path rather
+   than patching =ntp=, Perl or =perl-net-ssleay=.
+
+2. *OpenNTPD: the local =openntpd/cross-fixed= package variant.*
+   =modules/spartan/packages/ntp.scm= inherits upstream OpenNTPD and replaces
+   two build phases:
+   - =fix-update-script= selects =/bin/sh= from native inputs for the
+     build-time bootstrap script, falling back to ordinary inputs for native
+     builds. It retains upstream's substitution disabling the Git invocation.
+   - =adjust-C_INCLUDE_PATH= removes the raw OpenBSD source-header directory
+     from both =C_INCLUDE_PATH= and =CROSS_C_INCLUDE_PATH=. Upstream only
+     adjusted the former, so cross-compilation picked up incompatible headers
+     and failed with =sys/_null.h: No such file or directory=.
+
+3. *Filesystem resizing: select tool dependencies before constructing gexps.*
+   =modules/spartan/services/file-systems.scm= supplies the channel's
+   =resize-file-system-service-type=. The upstream service retained all
+   filesystem tools through runtime dispatch, including broken cross-build
+   dependencies of =bcachefs-tools= for an ext4 root. The replacement selects
+   only the applicable tool: =e2fsprogs=, =btrfs-progs= or =bcachefs-tools=,
+   together with =cloud-utils=. The Pi therefore avoids the unused bcachefs
+   Rust/Clang dependency graph. These tool packages are otherwise unmodified.
+
+5. *Resize service: include the channel's runtime module in its closure.*
+   The same service explicitly includes the =spartan= namespace when computing
+   its source-module closure. Guix's default selector includes only =gnu= and
+   =guix= modules, which omitted =(spartan build file-systems)= and caused
+   compilation of =shepherd-resize-file-system--.go= to fail. This is a
+   module-packaging fix relevant to native builds as well as cross-builds.
+
+6. *Pi bootloader: use U-Boot with Extlinux instead of the EFI/GRUB chain.*
+   =modules/spartan/bootloader/raspberrypi.scm= provides
+   =u-boot-rpi-arm64-bootloader= using stock =u-boot-rpi-arm64-bin= and
+   =raspberrypi-firmware=. The upstream =grub-efi-netboot-removable-bootloader=
+   package executed the target =grub-mknetdir= on the build machine. The channel
+   assembles boot files with native Scheme code and uses Guix's existing Extlinux
+   generator to load Linux directly.
+
+*** Related image and runtime corrections
+
+1. The boot-file bundle explicitly sets =arm_64bit=1= in the last firmware
+   configuration include: upstream's initial value can reflect the x86 machine
+   that loaded the module. Its shared image/deployment installer dereferences
+   symlinks for FAT and installs =u-boot.bin= as a file. The image keeps the FAT
+   partition at MBR type =0x0C= and mounted at =/boot/firmware=, avoiding Guix's
+   special =/boot/efi= rewriting. These address boot-image construction, not CPU
+   emulation.
+
+2. The replacement resize implementation also resolves device aliases and parent
+   partitions, waits for the relevant mount, uses
+   =btrfs filesystem resize max MOUNT-POINT=, and retries filesystem growth after
+   =growpart= reports NOCHANGE.
+   Those are runtime correctness fixes, independent of cross-compilation.
 
 ** Development and tests
 
