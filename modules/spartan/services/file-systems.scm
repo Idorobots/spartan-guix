@@ -81,7 +81,11 @@
      (start
       (with-imported-modules (source-module-closure
                               '((spartan build file-systems)
-                                (gnu system file-systems)))
+                                (gnu system file-systems))
+                              ;; The default selects only gnu/guix modules.
+                              #:select? (lambda (module)
+                                          (or (guix-module-name? module)
+                                              (eq? (car module) 'spartan))))
         #~(lambda _
             (resize-file-system
              (spec->file-system '#$spec)

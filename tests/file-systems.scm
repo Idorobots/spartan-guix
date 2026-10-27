@@ -42,6 +42,10 @@
     ((@@ (guix gexp) gexp-inputs) (shepherd-service-start (shepherd config))))
    string<?))
 
+(test-assert "resize helper is shipped in the generated service's module closure"
+  (member '(spartan build file-systems)
+          (gexp-modules (shepherd-service-start (shepherd (configuration "ext4"))))))
+
 (for-each
  (lambda (type)
    (test-equal (string-append type " retains only growpart and resize2fs")
