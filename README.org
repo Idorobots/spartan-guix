@@ -155,6 +155,26 @@ possible.
    =growpart= reports NOCHANGE.
    Those are runtime correctness fixes, independent of cross-compilation.
 
+*** Cortex-A53 Guile linker workaround
+
+=(spartan packages guile)= provides =guile-3.0/cortex-a53= and
+=guile-3.0-latest/cortex-a53=. They retain the upstream versions and build
+settings, appending =-Wl,--fix-cortex-a53-843419= to =LDFLAGS= only when
+building for AArch64, natively or by cross-compilation. Existing linker flags
+are preserved. JIT support remains enabled.
+
+The Pi 3 OS uses =package-with-cortex-a53-guile= for its system packages,
+Guix service package and Shepherd runtime, including their explicit Guile
+extension dependencies. The Shepherd override belongs in =essential-services=
+so it replaces the default instance rather than adding a second root service.
+Consumers adding Guile-dependent packages should apply the same helper.
+This does not globally replace Guix's default interpreter for generated boot
+scripts or implicit build-system inputs.
+
+This addresses a suspected Cortex-A53 erratum 843419 sequence in compiled
+=libguile= code. The linker can rewrite susceptible =ADRP= sequences or insert
+veneers; it does not process machine code emitted later by the JIT.
+
 ** Development and tests
 
 With GNU Make and the channel's dependencies installed, run from this repository

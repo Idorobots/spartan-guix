@@ -4,6 +4,7 @@
   #:use-module (gnu services)
   #:use-module (gnu services base)
   #:use-module (gnu services networking)
+  #:use-module (gnu services shepherd)
   #:use-module (gnu system)
   #:use-module (gnu system file-systems)
   #:use-module (gnu system image)
@@ -11,6 +12,7 @@
   #:use-module (guix platforms arm)
   #:use-module (nongnu packages linux)
   #:use-module (spartan bootloader raspberrypi)
+  #:use-module (spartan packages guile)
   #:use-module (spartan packages ntp)
   #:use-module (spartan services file-systems)
   #:export (%rpi-root-file-system
@@ -53,6 +55,14 @@
    (kernel linux-arm64-generic)
    (firmware (list linux-firmware))
    (initrd-modules '())
+   (packages (map package-with-cortex-a53-guile %base-packages))
+   (essential-services
+    (modify-services (operating-system-default-essential-services this-operating-system)
+      (shepherd-root-service-type config =>
+        (shepherd-configuration
+         (inherit config)
+         (shepherd (package-with-cortex-a53-guile
+                    (shepherd-configuration-shepherd config)))))))
    (bootloader
     (bootloader-configuration
      (bootloader u-boot-rpi-arm64-bootloader)
@@ -66,7 +76,12 @@
                     (openntpd-configuration
                      (openntpd openntpd/cross-fixed)))
            %rpi-resize-file-system-service
-           %base-services))))
+           (modify-services %base-services
+             (guix-service-type config =>
+               (guix-configuration
+                (inherit config)
+                (guix (package-with-cortex-a53-guile
+                       (guix-configuration-guix config))))))))))
 
 (define initialize-rpi-boot-partition
   ;; Firmware and U-Boot live on FAT. Guix installs extlinux.conf on root.
