@@ -52,8 +52,8 @@ the complete bootloader profile and redirects GRUB to the root filesystem.
 With the channel and its dependencies installed, build the working-tree image:
 
 #+begin_src sh
-guix system image -L . --target=aarch64-linux-gnu --root=pi3-barebones-image \
-  gnu/system/images/raspberrypi.scm
+guix system image -L modules --target=aarch64-linux-gnu --root=pi3-barebones-image \
+  modules/gnu/system/images/raspberrypi.scm
 #+end_src
 
 An individual host can extend the baseline:
@@ -81,9 +81,13 @@ preserves native builds. The Raspberry Pi resize service selects it even
 though the root filesystem is ext4. Remove the variant when updating to a
 Guix revision that fixes the input.
 
-Package definitions live under =spartan/packages/=, reusable service modules
-under =spartan/services/= as they are added, and image types in Guix's standard
-=gnu/system/images/= discovery namespace. File paths and module names match.
+Reusable modules live under =modules/=, selected by the =directory= field in
+=.guix-channel=. Only this tree is compiled when installing the channel; CI
+scripts and executable tests remain outside it.
+Package definitions live under =modules/spartan/packages/=, reusable service
+modules under =modules/spartan/services/= as they are added, and image types
+under =modules/gnu/system/images/= in Guix's standard discovery namespace.
+Paths relative to =modules/= match the Scheme module names.
 
 ** Development and tests
 
@@ -122,7 +126,7 @@ Guix resolves runtime dependencies from the committed =.guix-channel=.
 The generated file works with Guix's isolated channel evaluator. Commit the
 channel changes before using this bootstrap; it loads committed source.
 The ordinary =check= and =check-image= targets exercise working-tree source
-through =-L .=.
+through =-L modules=.
 
 GitHub Actions runs this real-channel bootstrap, all regression tests, the
 cross-build graph and named discovery on pushes to =main=, pull requests and

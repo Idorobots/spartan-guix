@@ -1,5 +1,6 @@
 (channel
  (version 0)
+ (directory "modules")
  (dependencies
   (channel
    (name nonguix)

@@ -18,7 +18,8 @@
 (define root (dirname (dirname (canonicalize-path (current-filename)))))
 (define direct-image
   (save-module-excursion
-   (lambda () (load (string-append root "/gnu/system/images/raspberrypi.scm")))))
+   (lambda ()
+     (load (string-append root "/modules/gnu/system/images/raspberrypi.scm")))))
 (define img (os->image rpi3-barebones-os #:type rpi-image-type))
 (define converted (operating-system-for-image img))
 
