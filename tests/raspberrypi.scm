@@ -27,8 +27,9 @@
   (find (lambda (value) (eq? (service-kind value) type))
         (operating-system-user-services os)))
 
-(test-equal "barebones OS adds only DHCP, NTP and resizing to base services"
-  (append (list dhcpcd-service-type ntp-service-type resize-file-system-service-type)
+(test-equal "barebones OS adds only DHCP, OpenNTPD and resizing to base services"
+  (append (list dhcpcd-service-type openntpd-service-type
+                resize-file-system-service-type)
           (map service-kind %base-services))
   (map service-kind (operating-system-user-services rpi3-barebones-os)))
 

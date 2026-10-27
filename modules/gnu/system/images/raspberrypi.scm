@@ -13,6 +13,7 @@
   #:use-module (guix gexp)
   #:use-module (guix platforms arm)
   #:use-module (nongnu packages linux)
+  #:use-module (spartan packages ntp)
   #:use-module (spartan services file-systems)
   #:export (%rpi-root-file-system
             %rpi-boot-file-system
@@ -78,7 +79,9 @@
             %base-file-systems))
    (services
     (cons* (service dhcpcd-service-type)
-           (service ntp-service-type)
+           (service openntpd-service-type
+                    (openntpd-configuration
+                     (openntpd openntpd/cross-fixed)))
            %rpi-resize-file-system-service
            %base-services))))
 

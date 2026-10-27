@@ -44,10 +44,17 @@ Its tested Guix revision is selected separately in =ci/channels.scm=.
   =%rpi-resize-file-system-service= for compatible host configurations.
 
 The Pi 3 OS includes the firmware -> U-Boot EFI -> GRUB boot chain, an ARM64
-kernel and firmware, DHCP, NTP and automatic root filesystem resizing. The image
+kernel and firmware, DHCP, OpenNTPD clock synchronization and automatic root
+filesystem resizing. OpenNTPD uses Guix's default server pool and avoids the
+reference NTP package's Perl SSL helper dependencies when cross-compiling. The image
 uses MBR, a 256 MiB FAT32 =PIBOOT= partition mounted at =/boot/firmware=, and a
 persistent ext4 =Guix= root partition last on the card. Its initializer copies
 the complete bootloader profile and redirects GRUB to the root filesystem.
+
+The =openntpd/cross-fixed= variant in =(spartan packages ntp)= selects the native
+shell for OpenNTPD's bootstrap script and excludes raw OpenBSD headers from the
+cross compiler's include path, correcting two cross-build issues in the pinned
+Guix revision.
 
 With the channel and its dependencies installed, build the working-tree image:
 
