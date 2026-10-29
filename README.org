@@ -124,6 +124,20 @@ possible.
    together with =cloud-utils=. The Pi therefore avoids the unused bcachefs
    Rust/Clang dependency graph. These tool packages are otherwise unmodified.
 
+4. *libcbor: select target CMocka when cross-compiling.*
+   =(spartan packages compression)= provides =libcbor/cross-fixed=. Guix commit
+   =ebba73d4f78140c9489b71583376d59cf0a28951= enabled libcbor's tests but put
+   CMocka in =native-inputs=. The test executables link against CMocka, so
+   cross-builds need the target library. The variant moves CMocka to =inputs=
+   only for cross-builds, retaining upstream configure flags and test
+   compilation. Guix's CMake cross build system skips test execution by default.
+   Native builds retain the upstream derivation and test behavior.
+
+   =package-with-cross-fixed-libcbor= rewrites explicit transitive dependencies,
+   including =OpenSSH -> libfido2 -> libcbor=. Consumers can select it with
+   =(openssh (package-with-cross-fixed-libcbor openssh))= in an
+   =openssh-configuration=. This does not rewrite implicit build tools.
+
 5. *Resize service: include the channel's runtime module in its closure.*
    The same service explicitly includes the =spartan= namespace when computing
    its source-module closure. Guix's default selector includes only =gnu= and
