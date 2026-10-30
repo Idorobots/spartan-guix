@@ -233,19 +233,41 @@ the applicable image fixes. Run commands from this channel's root with
    OS uses =(compose package-with-cortex-a53-guile
    package-with-cross-fixed-groff)= to preserve both fixes.
 
+9. *BIND: omit the obsolete target PLY dependency.*
+   =(spartan packages dns)= provides =isc-bind/cross-fixed=. The pinned BIND
+   9.19.24 recipe lists =python-ply= in target inputs, but that source release
+   no longer contains the old =isc= Python module that used PLY. The only
+   PLY references in its release archive are historical changelog entries.
+   The stale input causes even image =--dry-run= to fail during lowering:
+
+   #+begin_example
+   python-ply@3.11: build system `pyproject' does not support cross builds
+   #+end_example
+
+   The variant removes only =python-ply= from cross-build inputs. It retains
+   Python, all build phases, the =out= and =utils= outputs, and BIND's DNS
+   utilities. Native derivations remain identical to upstream. The homelab
+   Pi management host selects this variant for its additional BIND package;
+   the channel's barebones OS does not include BIND. This is a correction to
+   BIND's dependency list, not general cross-build support for =pyproject=.
+
 *** Verification and current image-build status
 
-The reference NTP, ALSA library/utilities, and minimal Groff variants have
+The reference NTP, ALSA library/utilities, minimal Groff, and BIND variants have
 successfully cross-built from x86-64 to AArch64. The NTP runtime check above
 verifies that the compiled XS extension works with target Perl and OpenSSL,
 including certificate-verified HTTPS and rejection of an untrusted certificate.
-The cross-built =troff= also formatted text under AArch64 QEMU.
+The cross-built =troff= also formatted text under AArch64 QEMU, and BIND's
+=named -v= and =dig -v= ran successfully under the same emulator.
 
-=tests/ntp.scm=, =tests/linux.scm=, and =tests/groff.scm= check dependency
-selection and unchanged native x86-64/AArch64 derivations. The image tests
+=tests/ntp.scm=, =tests/linux.scm=, =tests/groff.scm=, and =tests/dns.scm= check
+dependency selection and unchanged native x86-64/AArch64 derivations. The image tests
 check selection of the corrected udev rules and =man-db= dependency before
 and after image conversion. The SRFI-64 suites and selected Guix lint checks
 passed; these checks do not constitute a boot test or a complete image build.
+BIND retains upstream lint findings for its =nghttp2= input label and its
+=check= phase not honoring =#:tests?=; the cross variant does not alter those
+phases or native recipes.
 
 For isolated package builds from this channel's root:
 
@@ -256,16 +278,14 @@ guix build -L modules --target=aarch64-linux-gnu --no-grafts \
   -e '(@ (spartan packages linux) alsa-utils/cross-fixed)'
 guix build -L modules --target=aarch64-linux-gnu --no-grafts \
   -e '(@ (spartan packages groff) groff-minimal/cross-fixed)'
+guix build -L modules --target=aarch64-linux-gnu --no-grafts \
+  -e '(@ (spartan packages dns) isc-bind/cross-fixed)'
 #+end_src
 
-With the fixes selected, the homelab's Pi management image evaluation passed
-Groff and =man-db= but subsequently stopped at:
-
-#+begin_example
-python-ply@3.11: build system `pyproject' does not support cross builds
-#+end_example
-
-That is a remaining cross-build limitation; no Python/PLY fix is included here.
+With these fixes selected, the homelab's Pi management image =--dry-run=
+successfully lowers its dependency graph and reports the pending builds and
+downloads. A completed dry run does not establish that every remaining package
+builds or that the resulting image boots on hardware.
 
 *** Related image and runtime corrections
 
