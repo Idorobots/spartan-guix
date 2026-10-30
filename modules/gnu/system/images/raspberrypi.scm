@@ -13,6 +13,7 @@
   #:use-module (nongnu packages linux)
   #:use-module (spartan bootloader raspberrypi)
   #:use-module (spartan packages guile)
+  #:use-module (spartan packages groff)
   #:use-module (spartan packages linux)
   #:use-module (spartan packages ntp)
   #:use-module (spartan services file-systems)
@@ -56,7 +57,9 @@
    (kernel linux-arm64-generic)
    (firmware (list linux-firmware))
    (initrd-modules '())
-   (packages (map package-with-cortex-a53-guile %base-packages))
+   (packages (map (compose package-with-cortex-a53-guile
+                           package-with-cross-fixed-groff)
+                  %base-packages))
    (essential-services
     (modify-services (operating-system-default-essential-services this-operating-system)
       (shepherd-root-service-type config =>

@@ -91,8 +91,10 @@ multi-device filesystems.
 ** Cross-compilation fixes and workarounds
 
 The supported cross-build workflow uses =--target=aarch64-linux-gnu= on an
-x86-64 build machine. Some packages required workaround to make cross-compilation
-possible.
+x86-64 build machine. The fixes below address failures in the pinned upstream
+recipes; select their variants explicitly or use the Pi base OS, which integrates
+the applicable image fixes. Run commands from this channel's root with
+=-L modules= to test working-tree changes rather than an older installed channel.
 
 *** Modules
 
@@ -113,14 +115,25 @@ possible.
    native OpenSSL while linking target OpenSSL. A build-only Config overlay
    avoids loading target XS modules into native Perl. The dependency rewrite
    covers indirect SSL inputs through HTTP::Tiny and IO::Socket::SSL too.
+   The overlay also supplies native =Errno.pm= with its architecture guard
+   removed for build-time tools only; its constants must describe the machine
+   executing those tools. This overlay is not installed in the target module.
 
    =(spartan packages perl)= supplies =perl/cross-fixed=: it installs the
    generated target XS headers and restores the preprocessor's =-P= option
    when parsing errno values. Without that flag, the pinned cross-built Perl
-   produces an empty =Errno.pm= and HTTP::Tiny cannot load. The NTP variant
+   produces an empty =Errno.pm= and HTTP::Tiny cannot load. Preprocessor input
+   remains a filename rather than shell redirection, since the cross-build's
+   miniperl cannot execute the target shell on the build machine. The NTP variant
    also embeds target Perl in script shebangs and target Guile and module
    paths in the =update-leap= wrapper. Native derivations remain identical
    to upstream for Perl, Net::SSLeay and NTP.
+
+   These wrapper fixes address two failures after the XS build: configure could
+   not find target Perl on the native executable search path, and =wrap-script=
+   otherwise generated =#!#f= because native Guile was not an executable input.
+   The package now supplies =PATH_PERL= explicitly and passes the target Guile
+   path and target =PERL5LIB= directories to =wrap-script=.
 
    Build and check the cross package from this channel's directory:
 
@@ -199,6 +212,60 @@ possible.
    =package-with-cross-fixed-alsa= rewrites explicit dependencies, and the Pi
    base OS applies it to its udev rules. No tests are disabled, audio rules
    are retained, and native ALSA recipes are unchanged.
+   Adding target =coreutils-minimal= also fixes the subsequent
+   =patch-alsactl-udev-rules= failure looking for =bin/cat= in target inputs.
+
+8. *Groff: use native formatters to build documentation.*
+   =groff-minimal= 1.24.0 still builds documentation: its inherited
+   =--with-doc=no= flag is no longer recognized upstream. The stock cross
+   make flags supply =GROFFBIN= but leave =pdfmom='s =GROFF_COMMAND= set to
+   =test-groff=, which is absent from the executable search path and would
+   invoke target binaries if found. =(spartan packages groff)= provides
+   =groff/cross-fixed= and =groff-minimal/cross-fixed=. Cross builds select
+   native =groff= and =pdfmom=, set =GROFF_BIN_PATH= to the native =bin/=
+   directory, and make =GROFF_COMMAND= follow =GROFFBIN=. Documentation is
+   retained and native derivations are unchanged. The Pi base OS applies
+   =package-with-cross-fixed-groff= to its packages, including =man-db=.
+
+   Apply this rewrite before =package-with-cortex-a53-guile= when composing
+   both helpers. The latter can clone dependencies, so applying the Groff
+   replacement afterward can miss the original package objects. The Pi base
+   OS uses =(compose package-with-cortex-a53-guile
+   package-with-cross-fixed-groff)= to preserve both fixes.
+
+*** Verification and current image-build status
+
+The reference NTP, ALSA library/utilities, and minimal Groff variants have
+successfully cross-built from x86-64 to AArch64. The NTP runtime check above
+verifies that the compiled XS extension works with target Perl and OpenSSL,
+including certificate-verified HTTPS and rejection of an untrusted certificate.
+The cross-built =troff= also formatted text under AArch64 QEMU.
+
+=tests/ntp.scm=, =tests/linux.scm=, and =tests/groff.scm= check dependency
+selection and unchanged native x86-64/AArch64 derivations. The image tests
+check selection of the corrected udev rules and =man-db= dependency before
+and after image conversion. The SRFI-64 suites and selected Guix lint checks
+passed; these checks do not constitute a boot test or a complete image build.
+
+For isolated package builds from this channel's root:
+
+#+begin_src sh
+guix build -L modules --target=aarch64-linux-gnu --no-grafts \
+  -e '(@ (spartan packages ntp) ntp/cross-fixed)'
+guix build -L modules --target=aarch64-linux-gnu --no-grafts \
+  -e '(@ (spartan packages linux) alsa-utils/cross-fixed)'
+guix build -L modules --target=aarch64-linux-gnu --no-grafts \
+  -e '(@ (spartan packages groff) groff-minimal/cross-fixed)'
+#+end_src
+
+With the fixes selected, the homelab's Pi management image evaluation passed
+Groff and =man-db= but subsequently stopped at:
+
+#+begin_example
+python-ply@3.11: build system `pyproject' does not support cross builds
+#+end_example
+
+That is a remaining cross-build limitation; no Python/PLY fix is included here.
 
 *** Related image and runtime corrections
 
