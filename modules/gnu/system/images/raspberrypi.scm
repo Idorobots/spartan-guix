@@ -13,6 +13,7 @@
   #:use-module (nongnu packages linux)
   #:use-module (spartan bootloader raspberrypi)
   #:use-module (spartan packages guile)
+  #:use-module (spartan packages linux)
   #:use-module (spartan packages ntp)
   #:use-module (spartan services file-systems)
   #:export (%rpi-root-file-system
@@ -77,6 +78,11 @@
                      (openntpd openntpd/cross-fixed)))
            %rpi-resize-file-system-service
            (modify-services %base-services
+             (udev-service-type config =>
+               (udev-configuration
+                (inherit config)
+                (rules (map package-with-cross-fixed-alsa
+                            (udev-configuration-rules config)))))
              (guix-service-type config =>
                (guix-configuration
                 (inherit config)

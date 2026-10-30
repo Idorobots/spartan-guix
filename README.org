@@ -96,13 +96,45 @@ possible.
 
 *** Modules
 
-1. *Time service: select OpenNTPD instead of reference NTP.*
+1. *Time services: OpenNTPD baseline and cross-fixed reference NTP.*
    =modules/gnu/system/images/raspberrypi.scm= uses =openntpd-service-type=
-   with Guix's default server pool. Reference =ntp= brings in Perl SSL helper
-   dependencies through =update-leap=. Its =perl-net-ssleay= cross-build tried
-   to execute the target OpenSSL and failed; the pinned Perl cross-build also
-   assumes no XS extensions. The channel avoids this dependency path rather
-   than patching =ntp=, Perl or =perl-net-ssleay=.
+   with Guix's default server pool. Hosts needing reference NTP's large initial
+   clock adjustment (=ntpd -g=) can use:
+
+   #+begin_src scheme
+   (use-modules (gnu services networking) (spartan packages ntp))
+   (service ntp-service-type
+            (ntp-configuration (ntp ntp/cross-fixed)))
+   #+end_src
+
+   =ntp/cross-fixed= retains =update-leap= and its HTTPS dependencies. The
+   =(spartan packages tls)= variant =perl-net-ssleay/cross-fixed= runs native
+   Perl/MakeMaker with the target Perl configuration and headers, and probes
+   native OpenSSL while linking target OpenSSL. A build-only Config overlay
+   avoids loading target XS modules into native Perl. The dependency rewrite
+   covers indirect SSL inputs through HTTP::Tiny and IO::Socket::SSL too.
+
+   =(spartan packages perl)= supplies =perl/cross-fixed=: it installs the
+   generated target XS headers and restores the preprocessor's =-P= option
+   when parsing errno values. Without that flag, the pinned cross-built Perl
+   produces an empty =Errno.pm= and HTTP::Tiny cannot load. The NTP variant
+   also embeds target Perl in script shebangs and target Guile and module
+   paths in the =update-leap= wrapper. Native derivations remain identical
+   to upstream for Perl, Net::SSLeay and NTP.
+
+   Build and check the cross package from this channel's directory:
+
+   #+begin_src sh
+   guix build -L modules --target=aarch64-linux-gnu \
+     -e '(@ (spartan packages ntp) ntp/cross-fixed)'
+   # With Python 3, native openssl, and qemu-aarch64 available:
+   python3 tests/ntp-cross-runtime.py /gnu/store/…-ntp-4.2.8p18 /path/to/qemu-aarch64
+   #+end_src
+
+   The runtime check loads the target XS module, checks errno constants,
+   runs =ntpd --version= and =update-leap -h=, downloads over loopback HTTPS
+   with certificate verification, and verifies rejection of an untrusted
+   certificate. It does not change the machine's clock or require binfmt.
 
 2. *OpenNTPD: the local =openntpd/cross-fixed= package variant.*
    =modules/spartan/packages/ntp.scm= inherits upstream OpenNTPD and replaces
@@ -152,6 +184,21 @@ possible.
    package executed the target =grub-mknetdir= on the build machine. The channel
    assembles boot files with native Scheme code and uses Guix's existing Extlinux
    generator to load Linux directly.
+
+7. *ALSA: keep bootstrap tools native and udev's cat on the target.*
+   The pinned =alsa-lib= Git recipe places Autoconf, Automake and Libtool in
+   target inputs despite executing them during bootstrap. This unnecessarily
+   cross-builds Automake, whose =t/strip2.sh= test compiles an AArch64 program
+   and then invokes native =strip=, failing with an unrecognized file format.
+   =(spartan packages linux)= provides =alsa-lib/cross-fixed=, which moves
+   these three tools to native inputs for cross builds. This also makes
+   ALSA's bootstrap executable on the build machine.
+
+   =alsa-utils/cross-fixed= selects the corrected library and explicitly adds
+   target =coreutils-minimal= for =cat= in the installed udev rule.
+   =package-with-cross-fixed-alsa= rewrites explicit dependencies, and the Pi
+   base OS applies it to its udev rules. No tests are disabled, audio rules
+   are retained, and native ALSA recipes are unchanged.
 
 *** Related image and runtime corrections
 
