@@ -23,36 +23,10 @@
                      (package-arguments perl-net-ssleay))
            ((#:phases phases)
             #~(modify-phases #$phases
-                (add-before 'configure 'configure-cross-perl
-                  (lambda* (#:key inputs native-inputs #:allow-other-keys)
-                    ;; MakeMaker runs on the build machine, but must generate
-                    ;; the target Perl ABI, compiler and installation paths.
-                    (let* ((perl (assoc-ref inputs "perl"))
-                           (headers (find-files (string-append perl "/lib/perl5")
-                                                "^perl\\.h$"))
-                           (archlib (dirname (dirname (car headers))))
-                           (config-dir (string-append (getcwd) "/cross-config"))
-                           (previous (getenv "PERL5LIB")))
-                      ;; Do not put the entire target archlib in @INC: its
-                      ;; XS modules cannot be loaded by the native Perl.
-                      (mkdir-p config-dir)
-                      (for-each (lambda (name)
-                                  (copy-file (string-append archlib "/" name)
-                                             (string-append config-dir "/" name)))
-                                '("Config.pm" "Config_heavy.pl"))
-                      ;; Native Perl's generated Errno refuses a target Config.
-                      ;; Its constants are only used by build-time Perl tools.
-                      (let* ((native-perl (assoc-ref native-inputs "perl"))
-                             (errno (car (find-files
-                                          (string-append native-perl "/lib/perl5")
-                                          "^Errno\\.pm$"))))
-                        (copy-file errno (string-append config-dir "/Errno.pm"))
-                        (substitute* (string-append config-dir "/Errno.pm")
-                          (("die \"Errno architecture.*") "1;\n")))
-                      (setenv "PERL5LIB"
-                              (if previous
-                                  (string-append config-dir ":" previous)
-                                  config-dir)))
+                 (add-before 'configure 'configure-cross-perl
+                   #$configure-cross-perl-phase)
+                 (add-before 'configure 'use-native-openssl-probe
+                   (lambda* (#:key native-inputs #:allow-other-keys)
                     ;; Probe the build-machine OpenSSL executable, but keep
                     ;; OPENSSL_PREFIX pointing at target headers and libraries.
                     (setenv "BUILD_OPENSSL"

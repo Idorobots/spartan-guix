@@ -251,16 +251,87 @@ the applicable image fixes. Run commands from this channel's root with
    the channel's barebones OS does not include BIND. This is a correction to
    BIND's dependency list, not general cross-build support for =pyproject=.
 
+10. *Pango: disable introspection metadata generation for cross builds.*
+    =(spartan packages gtk)= provides =pango/cross-fixed=. The pinned recipe
+    forces =-Dintrospection=enabled=, but Meson cannot find the target
+    =gobject-introspection-1.0= dependency: the recipe supplies only native
+    introspection tools. The variant selects =-Dintrospection=disabled= and
+    removes the unused native scanner input only for cross builds. Pango's
+    C libraries and Cairo, Fontconfig, FreeType, HarfBuzz and Xft rendering
+    dependencies remain enabled. Cross-built GIR/typelib language-binding
+    metadata is omitted; this variant is for C consumers, not applications
+    requiring introspection bindings. Native builds retain upstream
+    introspection and the exact upstream derivation.
+
+    The homelab management image pulls this dependency through
+    =htop -> lm-sensors -> gnuplot/rrdtool -> pango=. The plotting variants
+    below select the corrected Pango, and =package-with-cross-fixed-pango=
+    is available for other explicit dependency chains.
+
+11. *gnuplot: add native Lua for documentation generation.*
+    =(spartan packages maths)= provides =gnuplot/cross-fixed=. Its TikZ help
+    generation executes =lua ../term/lua/gnuplot-tikz.lua termhelp=, while the
+    stock recipe supplies Lua only as a target library. The variant adds the
+    same Lua package to native inputs for cross builds and retains target Lua
+    for linking and runtime use, as well as documentation and plotting
+    backends. It selects =pango/cross-fixed= for rendering.
+
+12. *RRDtool: select target pkg-config and cross-compile Perl bindings.*
+    =(spartan packages rrdtool)= provides =rrdtool/cross-fixed=. Its custom
+    configure checks search for literal =pkg-config= rather than honoring the
+    target wrapper, incorrectly reporting missing GLib/regex support. The
+    variant replaces that executable with =pkg-config-for-target= in the
+    generated configure script.
+
+    RRDtool's Perl XS binding otherwise compiles with native =gcc= and fails
+    to link target =librrd=. The variant adds target =perl/cross-fixed= and
+    uses the shared =configure-cross-perl-phase= from =(spartan packages perl)=
+    after configure, while retaining native Perl for build-time execution.
+    Net::SSLeay uses the same build-only Config overlay. This preserves the
+    =RRDs= XS and =RRDp= piped bindings instead of disabling them. The test
+    environment also resolves its native timezone data from native inputs.
+    Rendering uses =pango/cross-fixed=.
+
+13. *lm-sensors: embed target script tools and select the cross compiler.*
+    =(spartan packages linux)= provides =lm-sensors/cross-fixed=. Its script
+    patch phase assumes that Coreutils, Grep and Sed are target inputs, but
+    those implicit build-system tools are native during a cross build. The
+    variant adds explicit target inputs for =uname=, =cat=, =cut=, =sleep=,
+    =readlink=, =grep= and =sed=, and passes target =CC= and =AR= to Make.
+    It retains both =lib= and =out= outputs, the sensor scripts, and the
+    corrected gnuplot/RRDtool dependencies above.
+
+    =(spartan packages admin)= exports =htop/cross-fixed=, encapsulating this
+    dependency rewrite. The homelab selects that package directly, then applies
+    its Cortex-A53 Guile rewrite as usual:
+
+    #+begin_src scheme
+    (use-modules (spartan packages admin))
+    ;; In the host's package list:
+    htop/cross-fixed
+    #+end_src
+
+    This covers both plotting branches without removing sensor support.
+    Native htop, gnuplot, RRDtool and lm-sensors derivations remain identical
+    to upstream. =package-with-cross-fixed-lm-sensors= and
+    =package-with-cross-fixed-plotting= remain available for other consumers.
+
 *** Verification and current image-build status
 
-The reference NTP, ALSA library/utilities, minimal Groff, and BIND variants have
-successfully cross-built from x86-64 to AArch64. The NTP runtime check above
+The reference NTP, ALSA library/utilities, minimal Groff, BIND, and the complete
+htop/lm-sensors/gnuplot/RRDtool/Pango chain have successfully cross-built from
+x86-64 to AArch64. The NTP runtime check above
 verifies that the compiled XS extension works with target Perl and OpenSSL,
 including certificate-verified HTTPS and rejection of an untrusted certificate.
 The cross-built =troff= also formatted text under AArch64 QEMU, and BIND's
 =named -v= and =dig -v= ran successfully under the same emulator.
+Target Pango rendered a PNG under QEMU, =gnuplot --version= and =htop --version=
+ran successfully, and target Perl loaded and called RRDtool's compiled =RRDs=
+extension. The NTP HTTPS runtime check also passed after extracting the shared
+Perl cross-configuration phase.
 
-=tests/ntp.scm=, =tests/linux.scm=, =tests/groff.scm=, and =tests/dns.scm= check
+=tests/ntp.scm=, =tests/linux.scm=, =tests/groff.scm=, =tests/dns.scm= and
+=tests/monitoring.scm= check
 dependency selection and unchanged native x86-64/AArch64 derivations. The image tests
 check selection of the corrected udev rules and =man-db= dependency before
 and after image conversion. The SRFI-64 suites and selected Guix lint checks
@@ -280,6 +351,8 @@ guix build -L modules --target=aarch64-linux-gnu --no-grafts \
   -e '(@ (spartan packages groff) groff-minimal/cross-fixed)'
 guix build -L modules --target=aarch64-linux-gnu --no-grafts \
   -e '(@ (spartan packages dns) isc-bind/cross-fixed)'
+guix build -L modules --target=aarch64-linux-gnu --no-grafts \
+  -e '(@ (spartan packages admin) htop/cross-fixed)'
 #+end_src
 
 With these fixes selected, the homelab's Pi management image =--dry-run=

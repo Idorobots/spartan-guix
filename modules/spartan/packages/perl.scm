@@ -3,7 +3,33 @@
   #:use-module (guix gexp)
   #:use-module (guix packages)
   #:use-module (guix utils)
-  #:export (perl/cross-fixed))
+  #:export (perl/cross-fixed
+            configure-cross-perl-phase))
+
+(define configure-cross-perl-phase
+  ;; Build-only overlay for MakeMaker: target ABI/compiler/install paths,
+  ;; but native XS modules and errno values for the executing interpreter.
+  #~(lambda* (#:key inputs native-inputs #:allow-other-keys)
+      (let* ((perl (assoc-ref inputs "perl"))
+             (headers (find-files (string-append perl "/lib/perl5") "^perl\\.h$"))
+             (archlib (dirname (dirname (car headers))))
+             (config-dir (string-append (getcwd) "/cross-config"))
+             (previous (getenv "PERL5LIB"))
+             (native-perl (assoc-ref native-inputs "perl"))
+             (errno (car (find-files (string-append native-perl "/lib/perl5")
+                                     "^Errno\\.pm$"))))
+        ;; Putting target archlib in @INC would load incompatible XS modules.
+        (mkdir-p config-dir)
+        (for-each (lambda (name)
+                    (copy-file (string-append archlib "/" name)
+                               (string-append config-dir "/" name)))
+                  '("Config.pm" "Config_heavy.pl"))
+        (copy-file errno (string-append config-dir "/Errno.pm"))
+        (substitute* (string-append config-dir "/Errno.pm")
+          (("die \"Errno architecture.*") "1;\n"))
+        (setenv "PERL5LIB" (if previous
+                              (string-append config-dir ":" previous)
+                              config-dir)))))
 
 (define perl/cross-fixed
   (package

@@ -1,11 +1,42 @@
 (define-module (spartan packages linux)
   #:use-module (gnu packages base)
   #:use-module (gnu packages linux)
+  #:use-module (guix gexp)
   #:use-module (guix packages)
   #:use-module (guix utils)
+  #:use-module (spartan packages maths)
+  #:use-module (spartan packages rrdtool)
   #:export (alsa-lib/cross-fixed
             alsa-utils/cross-fixed
-            package-with-cross-fixed-alsa))
+            package-with-cross-fixed-alsa
+            lm-sensors/cross-fixed
+            package-with-cross-fixed-lm-sensors))
+
+(define lm-sensors/cross-fixed
+  (package
+    (inherit lm-sensors)
+    (inputs
+     (let ((inputs (modify-inputs (package-inputs lm-sensors)
+                     (replace "gnuplot" gnuplot/cross-fixed)
+                     (replace "rrdtool" rrdtool/cross-fixed))))
+       (if (%current-target-system)
+           ;; Script paths must name target tools, not the implicit native
+           ;; build inputs that happen to be present in a native build.
+           (modify-inputs inputs (prepend coreutils grep sed))
+           inputs)))
+    (arguments
+     (if (%current-target-system)
+         (substitute-keyword-arguments (package-arguments lm-sensors)
+           ((#:make-flags flags #~'())
+            #~(cons* #$(string-append "CC=" (cc-for-target))
+                     #$(string-append "AR=" (ar-for-target))
+                     #$flags)))
+         (package-arguments lm-sensors)))))
+
+(define package-with-cross-fixed-lm-sensors
+  (package-input-rewriting
+   `((,lm-sensors . ,lm-sensors/cross-fixed))
+   #:deep? #f))
 
 (define alsa-lib/cross-fixed
   ;; The pinned ALSA recipe bootstraps a Git checkout, but puts its build
