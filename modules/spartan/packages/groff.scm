@@ -3,6 +3,7 @@
   #:use-module (guix gexp)
   #:use-module (guix packages)
   #:use-module (guix utils)
+  #:use-module (spartan packages cross)
   #:export (groff/cross-fixed
             groff-minimal/cross-fixed
             package-with-cross-fixed-groff))
@@ -35,7 +36,6 @@
 (define groff-minimal/cross-fixed (groff-with-cross-fix groff-minimal))
 
 (define package-with-cross-fixed-groff
-  (package-input-rewriting
+  (package-input-rewriting/cross
    `((,groff . ,groff/cross-fixed)
-     (,groff-minimal . ,groff-minimal/cross-fixed))
-   #:deep? #f))
+     (,groff-minimal . ,groff-minimal/cross-fixed))))

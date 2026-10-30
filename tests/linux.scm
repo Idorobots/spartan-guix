@@ -7,6 +7,7 @@
              (guix derivations)
              (guix packages)
              (guix store)
+             (guix utils)
              (spartan packages linux)
              (srfi srfi-1)
              (srfi srfi-64))
@@ -51,7 +52,9 @@
                           (and (package? item)
                                (string=? "alsa-utils" (package-name item))))
                         (udev-configuration-rules config))))
-       (and alsa (eq? alsa-lib/cross-fixed (lookup-package-input alsa "alsa-lib")))))
+        (and alsa
+             (parameterize ((%current-target-system "aarch64-linux-gnu"))
+               (eq? alsa-lib/cross-fixed (lookup-package-input alsa "alsa-lib"))))))
    (list rpi3-barebones-os
          (operating-system-for-image
           (os->image rpi3-barebones-os #:type rpi-image-type)))))

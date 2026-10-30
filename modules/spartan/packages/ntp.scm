@@ -49,26 +49,28 @@
   (package
     (inherit openntpd)
     (arguments
-     (substitute-keyword-arguments (package-arguments openntpd)
-       ((#:phases phases)
-        #~(modify-phases #$phases
-            (replace 'fix-update-script
-              (lambda* (#:key inputs native-inputs #:allow-other-keys)
-                (substitute* "update.sh"
-                  (("#!/bin/sh")
-                   (string-append
-                    "#!" (search-input-file (or native-inputs inputs) "/bin/sh")))
-                  (("git") "true"))))
-            (replace 'adjust-C_INCLUDE_PATH
-              (lambda* (#:key inputs #:allow-other-keys)
-                (let ((openbsd-include
-                       (string-append (assoc-ref inputs "openbsd") "/include")))
-                  (for-each
-                   (lambda (variable)
-                     (when (getenv variable)
-                       (setenv variable
-                               (string-join
-                                (delete openbsd-include
-                                        (string-split (getenv variable) #\:))
-                                ":"))))
-                   '("C_INCLUDE_PATH" "CROSS_C_INCLUDE_PATH")))))))))))
+     (if (%current-target-system)
+         (substitute-keyword-arguments (package-arguments openntpd)
+           ((#:phases phases)
+            #~(modify-phases #$phases
+                (replace 'fix-update-script
+                  (lambda* (#:key inputs native-inputs #:allow-other-keys)
+                    (substitute* "update.sh"
+                      (("#!/bin/sh")
+                       (string-append
+                        "#!" (search-input-file (or native-inputs inputs) "/bin/sh")))
+                      (("git") "true"))))
+                (replace 'adjust-C_INCLUDE_PATH
+                  (lambda* (#:key inputs #:allow-other-keys)
+                    (let ((openbsd-include
+                           (string-append (assoc-ref inputs "openbsd") "/include")))
+                      (for-each
+                       (lambda (variable)
+                         (when (getenv variable)
+                           (setenv variable
+                                   (string-join
+                                    (delete openbsd-include
+                                            (string-split (getenv variable) #\:))
+                                    ":"))))
+                       '("C_INCLUDE_PATH" "CROSS_C_INCLUDE_PATH"))))))))
+         (package-arguments openntpd)))))

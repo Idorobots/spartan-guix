@@ -4,6 +4,7 @@
   #:use-module (gnu packages rrdtool)
   #:use-module (guix packages)
   #:use-module (guix utils)
+  #:use-module (spartan packages cross)
   #:use-module (spartan packages gtk)
   #:use-module (spartan packages rrdtool)
   #:export (gnuplot/cross-fixed
@@ -20,12 +21,13 @@
            (prepend (lookup-package-input gnuplot "lua")))
          (package-native-inputs gnuplot)))
     (inputs
-     (modify-inputs (package-inputs gnuplot)
-       (replace "pango" pango/cross-fixed)))))
+     (if (%current-target-system)
+         (modify-inputs (package-inputs gnuplot)
+           (replace "pango" pango/cross-fixed))
+         (package-inputs gnuplot)))))
 
 (define package-with-cross-fixed-plotting
-  (package-input-rewriting
+  (package-input-rewriting/cross
    `((,gnuplot . ,gnuplot/cross-fixed)
      (,rrdtool . ,rrdtool/cross-fixed)
-     (,pango . ,pango/cross-fixed))
-   #:deep? #f))
+     (,pango . ,pango/cross-fixed))))

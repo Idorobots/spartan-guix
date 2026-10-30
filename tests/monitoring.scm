@@ -58,7 +58,8 @@
     (and (equal? (assoc-ref (bag-build-inputs bag) "lua")
                  (assoc-ref (bag-host-inputs bag) "lua"))
          (assoc-ref (bag-build-inputs bag) "lua")
-         (eq? pango/cross-fixed (lookup-package-input gnuplot/cross-fixed "pango")))))
+         (parameterize ((%current-target-system "aarch64-linux-gnu"))
+           (eq? pango/cross-fixed (lookup-package-input gnuplot/cross-fixed "pango"))))))
 
 (test-assert "RRDtool retains native Perl and adds target Perl for XS compilation"
   (let ((bag (package->bag rrdtool/cross-fixed "x86_64-linux" "aarch64-linux-gnu")))
@@ -72,11 +73,12 @@
                 '("coreutils" "grep" "sed")))))
 
 (test-assert "htop/cross-fixed selects both corrected plotting branches through sensors"
-  (let ((sensors (lookup-package-input htop/cross-fixed "lm-sensors")))
-    (and (eq? sensors lm-sensors/cross-fixed)
-         (eq? gnuplot/cross-fixed (lookup-package-input sensors "gnuplot"))
-         (eq? rrdtool/cross-fixed (lookup-package-input sensors "rrdtool"))
-         (eq? pango/cross-fixed (lookup-package-input rrdtool/cross-fixed "pango")))))
+  (parameterize ((%current-target-system "aarch64-linux-gnu"))
+    (let ((sensors (lookup-package-input htop/cross-fixed "lm-sensors")))
+      (and (eq? sensors lm-sensors/cross-fixed)
+           (eq? gnuplot/cross-fixed (lookup-package-input sensors "gnuplot"))
+           (eq? rrdtool/cross-fixed (lookup-package-input sensors "rrdtool"))
+           (eq? pango/cross-fixed (lookup-package-input rrdtool/cross-fixed "pango"))))))
 
 (define runner (test-runner-current))
 (test-end "monitoring-cross")

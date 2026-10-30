@@ -6,6 +6,7 @@
              (guix derivations)
              (guix packages)
              (guix store)
+             (guix utils)
              (spartan packages ntp)
              (spartan packages perl)
              (spartan packages tls)
@@ -27,7 +28,8 @@
               '("x86_64-linux" "aarch64-linux")))
      (list (cons perl perl/cross-fixed)
            (cons perl-net-ssleay perl-net-ssleay/cross-fixed)
-           (cons ntp ntp/cross-fixed)))))
+           (cons ntp ntp/cross-fixed)
+           (cons openntpd openntpd/cross-fixed)))))
 
 (test-assert "XS builds have native OpenSSL for probes and target Perl for ABI"
   (let ((bag (package->bag perl-net-ssleay/cross-fixed
@@ -38,15 +40,16 @@
                  (list perl/cross-fixed)))))
 
 (test-assert "reference NTP retains all HTTPS helper inputs and rewrites every SSL path"
-  (let* ((http (lookup-package-input ntp/cross-fixed "perl-http-tiny"))
-         (ssl (lookup-package-input ntp/cross-fixed "perl-io-socket-ssl")))
-    (and (eq? perl/cross-fixed (lookup-package-input ntp/cross-fixed "perl"))
-         (eq? perl-net-ssleay/cross-fixed
-              (lookup-package-input ntp/cross-fixed "perl-net-ssleay"))
-         (eq? perl-net-ssleay/cross-fixed
-              (lookup-package-input http "perl-net-ssleay"))
-         (eq? perl-net-ssleay/cross-fixed
-              (lookup-package-propagated-input ssl "perl-net-ssleay")))))
+  (parameterize ((%current-target-system "aarch64-linux-gnu"))
+    (let* ((http (lookup-package-input ntp/cross-fixed "perl-http-tiny"))
+           (ssl (lookup-package-input ntp/cross-fixed "perl-io-socket-ssl")))
+      (and (eq? perl/cross-fixed (lookup-package-input ntp/cross-fixed "perl"))
+           (eq? perl-net-ssleay/cross-fixed
+                (lookup-package-input ntp/cross-fixed "perl-net-ssleay"))
+           (eq? perl-net-ssleay/cross-fixed
+                (lookup-package-input http "perl-net-ssleay"))
+           (eq? perl-net-ssleay/cross-fixed
+                (lookup-package-propagated-input ssl "perl-net-ssleay"))))))
 
 (test-assert "reference NTP service retains large initial clock adjustments"
   (ntp-allow-large-adjustment? (ntp-configuration (ntp ntp/cross-fixed))))

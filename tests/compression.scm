@@ -41,9 +41,10 @@
            '("x86_64-linux" "aarch64-linux"))))
 
 (test-assert "OpenSSH's transitive libcbor dependency selects the cross fix"
-  (let* ((ssh (package-with-cross-fixed-libcbor openssh))
-         (fido (lookup-package-input ssh "libfido2")))
-    (eq? (lookup-package-input fido "libcbor") libcbor/cross-fixed)))
+  (parameterize ((%current-target-system "aarch64-linux-gnu"))
+    (let* ((ssh (package-with-cross-fixed-libcbor openssh))
+           (fido (lookup-package-input ssh "libfido2")))
+      (eq? (lookup-package-input fido "libcbor") libcbor/cross-fixed))))
 
 (define runner (test-runner-current))
 (test-end "libcbor-cross")

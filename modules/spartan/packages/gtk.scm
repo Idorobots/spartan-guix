@@ -3,6 +3,7 @@
   #:use-module (guix gexp)
   #:use-module (guix packages)
   #:use-module (guix utils)
+  #:use-module (spartan packages cross)
   #:export (pango/cross-fixed
             package-with-cross-fixed-pango))
 
@@ -26,6 +27,5 @@
 
 (define package-with-cross-fixed-pango
   ;; Consumers here use the C libraries, not GObject language bindings.
-  (package-input-rewriting
-   `((,pango . ,pango/cross-fixed))
-   #:deep? #f))
+  (package-input-rewriting/cross
+   `((,pango . ,pango/cross-fixed))))

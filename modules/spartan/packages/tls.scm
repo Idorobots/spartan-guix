@@ -4,6 +4,7 @@
   #:use-module (guix gexp)
   #:use-module (guix packages)
   #:use-module (guix utils)
+  #:use-module (spartan packages cross)
   #:use-module (spartan packages perl)
   #:export (perl-net-ssleay/cross-fixed
             package-with-cross-fixed-perl-net-ssleay))
@@ -37,7 +38,6 @@
          (package-arguments perl-net-ssleay)))))
 
 (define package-with-cross-fixed-perl-net-ssleay
-  (package-input-rewriting
+  (package-input-rewriting/cross
    `((,perl-net-ssleay . ,perl-net-ssleay/cross-fixed)
-     (,perl . ,perl/cross-fixed))
-   #:deep? #f))
+     (,perl . ,perl/cross-fixed))))

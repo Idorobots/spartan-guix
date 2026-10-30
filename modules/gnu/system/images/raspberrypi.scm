@@ -76,9 +76,9 @@
             %base-file-systems))
    (services
     (cons* (service dhcpcd-service-type)
-           (service openntpd-service-type
-                    (openntpd-configuration
-                     (openntpd openntpd/cross-fixed)))
+           (service ntp-service-type
+                    (ntp-configuration
+                     (ntp ntp/cross-fixed)))
            %rpi-resize-file-system-service
            (modify-services %base-services
              (udev-service-type config =>

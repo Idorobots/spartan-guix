@@ -3,6 +3,7 @@
   #:use-module (gnu packages compression)
   #:use-module (guix packages)
   #:use-module (guix utils)
+  #:use-module (spartan packages cross)
   #:export (libcbor/cross-fixed
             package-with-cross-fixed-libcbor))
 
@@ -27,6 +28,5 @@
 (define package-with-cross-fixed-libcbor
   ;; Rewrite explicit dependencies such as OpenSSH -> libfido2 -> libcbor,
   ;; without changing the implicit build-tool dependency graph.
-  (package-input-rewriting
-   `((,libcbor . ,libcbor/cross-fixed))
-   #:deep? #f))
+  (package-input-rewriting/cross
+   `((,libcbor . ,libcbor/cross-fixed))))

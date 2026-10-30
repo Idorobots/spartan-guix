@@ -11,6 +11,7 @@
              (guix packages)
              (ice-9 textual-ports)
              (spartan bootloader raspberrypi)
+             (spartan packages ntp)
              (spartan services file-systems)
              (srfi srfi-1)
              (srfi srfi-64))
@@ -29,11 +30,24 @@
   (find (lambda (value) (eq? (service-kind value) type))
         (operating-system-user-services os)))
 
-(test-equal "barebones OS adds only DHCP, OpenNTPD and resizing to base services"
-  (append (list dhcpcd-service-type openntpd-service-type
+(test-equal "barebones OS adds only DHCP, reference NTP and resizing to base services"
+  (append (list dhcpcd-service-type ntp-service-type
                 resize-file-system-service-type)
           (map service-kind %base-services))
   (map service-kind (operating-system-user-services rpi3-barebones-os)))
+
+(test-assert "barebones and converted images retain one patched NTP with large initial adjustments"
+  (every
+   (lambda (system)
+     (let* ((time-services
+             (filter (lambda (s) (eq? (service-kind s) ntp-service-type))
+                     (operating-system-user-services system)))
+            (config (and (= 1 (length time-services))
+                         (service-value (car time-services)))))
+       (and config (eq? ntp/cross-fixed (ntp-configuration-ntp config))
+            (ntp-allow-large-adjustment? config)
+            (not (service-of-type system openntpd-service-type)))))
+   (list rpi3-barebones-os converted)))
 
 (test-assert "barebones and image-converted service graphs resolve"
   (every (lambda (system)
