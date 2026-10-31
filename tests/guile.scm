@@ -4,6 +4,8 @@
              (gnu services shepherd)
              (gnu system image)
              (gnu system images raspberrypi)
+             (guix build-system)
+             ((guix config) #:select (%system))
              (guix gexp)
              (guix packages)
              (guix utils)
@@ -80,6 +82,20 @@
             (memq guile-3.0/cortex-a53 guiles)
             (not (memq guile-3.0 guiles))
             (not (memq guile-3.0-latest guiles)))))
+   (list rpi3-barebones-os converted)))
+
+(test-assert "Guix service uses selective compilation before and after image conversion"
+  (every
+   (lambda (os)
+     (let* ((services (operating-system-services os))
+            (config (service-value (fold-services services #:target-type guix-service-type)))
+            (p (guix-configuration-guix config))
+            (bag (package->bag p "aarch64-linux" #f))
+            (system (gnu-triplet->nix-system %system)))
+       (and (string=? system (bag-system bag))
+            (equal? (and (not (string=? system "aarch64-linux"))
+                         "aarch64-linux-gnu")
+                    (bag-target bag)))))
    (list rpi3-barebones-os converted)))
 
 (define runner (test-runner-current))

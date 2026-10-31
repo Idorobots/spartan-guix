@@ -1,7 +1,13 @@
-(use-modules (gnu packages base)
+(use-modules ((gnu packages admin) #:select (shepherd-0.10 shepherd-1.0))
+             (gnu packages base)
              (gnu packages guile)
              (gnu packages man)
+             ((gnu packages package-management) #:select (guix))
+             ((gnu packages ssh) #:select (guile-ssh))
+             (gnu image)
+             (gnu services)
              (gnu system)
+             (gnu system image)
              (gnu system images raspberrypi)
              (guix build-system)
              ((guix config) #:select (%system))
@@ -100,6 +106,64 @@
     (and (string=? "aarch64-linux" (bag-system bag))
          (not (bag-target bag)))))
 
+(define selective-consumers (list guix shepherd-0.10 shepherd-1.0 guile-ssh guile-readline))
+
+(test-assert "selected consumers cross-build on x86 and build natively on AArch64"
+  (every
+   (lambda (base)
+     (let* ((cross (package-with-cortex-a53-guile base #:system "x86_64-linux"))
+            (native (package-with-cortex-a53-guile base #:system "aarch64-linux"))
+            (cross-bag (package->bag cross "aarch64-linux" #f))
+            (native-bag (package->bag native "aarch64-linux" #f)))
+       (and (string=? "x86_64-linux" (bag-system cross-bag))
+            (string=? "aarch64-linux-gnu" (bag-target cross-bag))
+            (string=? "aarch64-linux" (bag-system native-bag))
+            (not (bag-target native-bag))
+            (eq? (package-source base) (package-source cross))
+            (equal? (package-outputs base) (package-outputs cross)))))
+   selective-consumers))
+
+(test-assert "cross consumers preserve upstream build tools and patched runtime Guile"
+  (parameterize ((%current-system "x86_64-linux")
+                 (%current-target-system "aarch64-linux-gnu"))
+    (every
+     (lambda (base)
+       (let ((p (package-with-cortex-a53-guile base #:system "x86_64-linux")))
+         (and (equal? (package-native-inputs base) (package-native-inputs p))
+              (eq? (package-with-cortex-a53-guile (lookup-package-input base "guile")
+                                                #:system "x86_64-linux")
+                   (lookup-package-input p "guile")))))
+     selective-consumers)))
+
+(test-assert "Guix propagates cross-built SSH separately from its native build-time SSH"
+  (let* ((p (package-with-cortex-a53-guile guix #:system "x86_64-linux"))
+         (runtime
+          (parameterize ((%current-system "aarch64-linux") (%current-target-system #f))
+            (lookup-package-propagated-input p "guile-ssh")))
+         (build
+          (parameterize ((%current-system "x86_64-linux")
+                         (%current-target-system "aarch64-linux-gnu"))
+            (lookup-package-native-input p "guile-ssh")))
+         (runtime-bag (package->bag runtime "aarch64-linux" #f))
+         (build-bag (package->bag build "x86_64-linux" #f)))
+    (and (eq? guile-ssh build)
+         (string=? "x86_64-linux" (bag-system runtime-bag))
+         (string=? "aarch64-linux-gnu" (bag-target runtime-bag))
+         (string=? "x86_64-linux" (bag-system build-bag))
+         (not (bag-target build-bag)))))
+
+(test-assert "Shepherd propagates target Fibers separately from native build-time Fibers"
+  (parameterize ((%current-system "aarch64-linux") (%current-target-system #f))
+    (let* ((p (package-with-cortex-a53-guile shepherd-1.0 #:system "x86_64-linux"))
+           (runtime (lookup-package-propagated-input p "guile-fibers"))
+           (build (lookup-package-native-input p "guile-fibers"))
+           (runtime-bag (package->bag runtime "aarch64-linux" #f))
+           (build-bag (package->bag build "x86_64-linux" #f)))
+      (and (string=? "x86_64-linux" (bag-system runtime-bag))
+           (string=? "aarch64-linux-gnu" (bag-target runtime-bag))
+           (string=? "x86_64-linux" (bag-system build-bag))
+           (not (bag-target build-bag))))))
+
 (with-store store
   (define (same-derivation? a b)
     (string=? (derivation-file-name a) (derivation-file-name b)))
@@ -108,7 +172,48 @@
     (if (string=? %system "aarch64-linux")
         (package-derivation store base "aarch64-linux" #:graft? #f)
         (package-cross-derivation store base "aarch64-linux-gnu"
-                                  %system #:graft? #f)))
+                                   %system #:graft? #f)))
+
+  (define (collision-free? packages)
+    ;; Exercise Guix's real manifest collision check without realizing graft
+    ;; prerequisites.  This only lowers derivations; it does not build a profile.
+    (parameterize ((%current-system "aarch64-linux")
+                   (%current-target-system #f)
+                   (%graft? #f))
+      (run-with-store store
+        (check-for-collisions (packages->manifest packages) "aarch64-linux"))))
+
+  (test-assert "routed Readline propagates its selected Guile's complete library list"
+    (parameterize ((%current-system "aarch64-linux") (%current-target-system #f))
+      (every
+       (lambda (system)
+         (let* ((p (package-with-cortex-a53-guile guile-readline #:system system))
+                (guile (lookup-package-input p "guile"))
+                (bag (package->bag p "aarch64-linux" #f)))
+           (and (equal? (package-propagated-inputs guile)
+                        (package-propagated-inputs p))
+                (string=? system (bag-system bag))
+                (equal? (and (not (string=? system "aarch64-linux"))
+                             "aarch64-linux-gnu")
+                        (bag-target bag)))))
+       '("x86_64-linux" "aarch64-linux"))))
+
+  (for-each
+   (lambda (system)
+     (test-assert (string-append "Readline and interactive Guile share a profile, compiled on " system)
+       (collision-free?
+        (map (lambda (p) (package-with-cortex-a53-guile p #:system system))
+             (list guile-readline guile-3.0-latest)))))
+   '("x86_64-linux" "aarch64-linux"))
+
+  (test-assert "combined base system profiles have no collisions before or after image conversion"
+    (every
+     (lambda (os)
+       (collision-free?
+        (service-value
+         (fold-services (operating-system-services os) #:target-type profile-service-type))))
+     (list rpi3-barebones-os
+           (operating-system-for-image (os->image rpi3-barebones-os #:type rpi-image-type)))))
 
   (test-assert "routed Guile and kernel derivations equal the runner's direct builds"
     (every
@@ -140,6 +245,27 @@
       (and (string=? "aarch64-linux" (derivation-system drv))
            (member (derivation-file-name selected) inputs)
            (not (member (derivation-file-name upstream) inputs)))))
+
+  (test-assert "selective consumers lower to x86 builds with patched AArch64 Guile"
+    (every
+     (lambda (base)
+       (let* ((base-guile (lookup-package-input base "guile"))
+              (selected (package-derivation
+                         store (package-with-cortex-a53-guile base-guile
+                                                             #:system "x86_64-linux")
+                         "aarch64-linux" #:graft? #f))
+              (build-guile (package-derivation store base-guile "x86_64-linux"
+                                               #:graft? #f))
+              (upstream (package-derivation store base-guile "aarch64-linux"
+                                            #:graft? #f))
+              (p (package-with-cortex-a53-guile base #:system "x86_64-linux"))
+              (drv (package-derivation store p "aarch64-linux" #:graft? #f))
+              (inputs (map derivation-input-path (derivation-inputs drv))))
+         (and (string=? "x86_64-linux" (derivation-system drv))
+              (member (derivation-file-name selected) inputs)
+              (member (derivation-file-name build-guile) inputs)
+              (not (member (derivation-file-name upstream) inputs)))))
+     selective-consumers))
 
   (test-assert "package replacements are routed in the selected build context"
     (let ((p (package-with-compilation-system original-dependency #:system "x86_64-linux")))
