@@ -23,8 +23,9 @@ Add this entry alongside Guix in the consumer's channel configuration:
   =%rpi-resize-file-system-service= for compatible host configurations.
 
 The Pi 3 OS includes the firmware -> U-Boot -> Linux boot chain, an ARM64
-kernel and firmware, DHCP, OpenNTPD clock synchronization and automatic root
-filesystem resizing. OpenNTPD uses Guix's default server pool. The image
+kernel and firmware, DHCP, reference NTP clock synchronization and automatic root
+filesystem resizing. NTP uses Guix's default server pool and initial large clock
+correction (=ntpd -g=), and retains its HTTPS leap-file helper. The image
 uses MBR, a 256 MiB FAT32 =PIBOOT= partition mounted at =/boot/firmware=, and a
 persistent ext4 =Guix= root partition last on the card.
 
@@ -41,7 +42,7 @@ Guix installs the configuration atomically during updates.
 With the channel and its dependencies installed, build the working-tree image:
 
 #+begin_src sh
-guix system image -L modules --target=aarch64-linux-gnu --root=pi3-barebones-image \
+guix system image -L modules --system=aarch64-linux --root=pi3-barebones-image \
   modules/gnu/system/images/raspberrypi.scm
 #+end_src
 
@@ -88,12 +89,141 @@ Partitions can grow only into adjacent free space; the Pi image deliberately
 places its root partition last. This service does not manage LVM volumes or
 multi-device filesystems.
 
-** Cross-compilation fixes and workarounds
+** Mixed compilation: native userland, selectively cross-built kernel and Guile
 
-The supported cross-build workflow uses =--target=aarch64-linux-gnu= on an
+The Pi image uses =--system=aarch64-linux=, without a global =--target=.
+Ordinary userland packages are the actual upstream package objects, including
+reference NTP, ALSA's udev rules and Groff through =man-db=. The homelab management
+host likewise selects upstream htop, BIND, lm-sensors and OpenSSH. These selections
+retain upstream native derivations and substitute eligibility, rather than
+selecting native-equivalent =/cross-fixed= aliases.
+
+=(spartan packages mixed)= exports =package-with-compilation-system=:
+
+#+begin_src scheme
+(use-modules (nongnu packages linux)
+             (spartan packages mixed))
+
+;; Default compilation platform: %system from (guix config), the platform of
+;; the Guix runner itself, independent of --system's %current-system binding.
+(package-with-compilation-system linux-arm64-generic)
+
+;; Explicit override for a selected native AArch64 compilation platform.
+(package-with-compilation-system linux-arm64-generic #:system "aarch64-linux")
+#+end_src
+
+The adapter's compilation platform is fixed when it is constructed. The required
+output platform is determined during lowering, from the requested system or
+target. Different platforms select cross-compilation; equal platforms select
+native compilation with target =#f=. Both Guix system names and GNU triplets are
+normalized before comparison. For a system-only cross request, the target comes
+from Guix's platform registry: the generic triplet guess
+=aarch64-unknown-linux-gnu= is not a registered target in the pinned Guix, whereas
+=aarch64-linux-gnu= is.
+
+On an x86-64 runner, the kernel and both patched Guile versions cross-build for
+AArch64, while their selected consumers are native AArch64 derivations. When
+evaluated on an AArch64 runner, the same selected packages build natively.
+Daemon offloading executes these selected derivations; it does not revise the
+compilation policy according to which worker eventually runs a job.
+
+The adapter delegates to the original package's bag, re-evaluating its deferred
+fields in the selected compilation context. It creates no copy derivation and
+preserves every output, including Guile's =debug= output, search paths and kernel
+properties. Propagated dependencies exposed to profiles are also routed, so they
+match the actual cross-built dependencies instead of silently selecting native
+copies. Package replacements and dependency grafts retain the selected
+architecture. Guix still performs its normal graft processing in the requesting
+graph; graft evaluation may realize packages even for an image =--derivation=.
+
+Apply recipe changes to the underlying package before wrapping it. The adapter
+delegates to that original recipe, rather than interpreting subsequent inherited
+argument or input overrides on the adapter as a new recipe.
+
+=(spartan packages guile)= routes =guile-3.0/cortex-a53= and
+=guile-3.0-latest/cortex-a53= through this adapter. The
+=package-with-cortex-a53-guile= helper rewrites explicit runtime dependencies,
+including propagated Guile extensions, and preserves upstream objects for
+unaffected packages. It leaves unrelated build-only dependencies and implicit
+build-system tools upstream. For an affected consumer that lists Guile in both
+=inputs= and =native-inputs=, both entries use the same replacement: otherwise
+the upstream native entry wins =PATH= and =PKG_CONFIG_PATH=, causing configure to
+select the wrong interpreter or link against upstream =libguile=.
+
+The helper accepts the same explicit compilation-platform override:
+
+#+begin_src scheme
+(use-modules (gnu packages guile)
+             (gnu packages package-management)
+             (spartan packages guile))
+
+(package-with-cortex-a53-guile guile-3.0 #:system "aarch64-linux")
+(package-with-cortex-a53-guile guix #:system "aarch64-linux")
+#+end_src
+
+The hardware linker fix remains enabled for native AArch64 builds, with JIT
+support retained. Putting patched Guile only in the profile would not repair
+absolute interpreter/library references in its consumers. Those rewritten
+consumers have custom derivations and generally require rebuilding, even though
+unrelated packages can use upstream substitutes. Cross-built and native
+libraries can coexist in the closure; Guix does not unify their store paths.
+
+Native AArch64 derivations require AArch64 execution, offloading, or transparent
+binfmt/QEMU execution for cache misses. Direct execution inside a container and
+execution through its Guix daemon are separate checks. The optional integration
+check builds a native AArch64 Guile-Zlib consumer, runs both routed Guile versions
+inside an AArch64 derivation, and exercises the consumer's compression FFI:
+
+#+begin_src sh
+guix repl -L modules tests/runtime/mixed.scm
+#+end_src
+
+=tests/mixed.scm= checks routing, same-platform fallback, exact direct-build
+derivations, metadata, propagated profile inputs, graft selection, and native
+consumers' direct Guile dependencies. Image tests check upstream package identity
+before and after image conversion. Full image construction and hardware boot
+remain separate acceptance checks.
+
+*** Verification results
+
+With Guix =2bc642182e5e7914c1ea4deb696b8e3566b12b3f= and the homelab's pinned
+Nonguix, using working-tree modules:
+
+- All 114 channel checks passed, including 15 mixed-compilation checks. The
+  homelab management-image suite passed all 14 checks.
+- Both barebones and management image dry runs passed, as did named image
+  discovery. They stop at the next graft-analysis prerequisite group: 18 custom
+  native AArch64 derivations for Guix, Shepherd and their extensions remained
+  after the Guile-Zlib check. This is not the full eventual image build count.
+- The selected kernel and both Guile versions, including debug outputs, were
+  successfully realized by reusing existing cross-built store outputs. Their
+  ungrafted derivations match direct cross-builds exactly; same-platform tests
+  also match direct native builds.
+- The daemon integration check executed AArch64 Guile 3.0.9 and 3.0.11 and
+  successfully exercised a newly native-built Guile-Zlib consumer's compression
+  FFI. Its configure log selects the routed patched Guile for the interpreter,
+  guild and pkg-config; all 141 upstream Guile-Zlib tests passed.
+- =guix weather= found all nine declared outputs of upstream NTP, ALSA utilities,
+  minimal Groff, BIND, htop, lm-sensors and OpenSSH on Bordeaux for AArch64.
+  This measures package outputs before grafting, not complete closure coverage.
+  Guix's normal security grafts remain enabled.
+- Upstream native AArch64 NTP, including its security grafts, was realized at
+  =/gnu/store/782hwxq205laym31j3knxxrki9221gq0-ntp-4.2.8p18=. The HTTPS runtime
+  script passed with it: runtime modules load, certificate-verified downloads
+  succeed, and untrusted certificates are rejected.
+
+Complete image derivation resolution was not finished: graft analysis triggered
+native Guile-consumer builds and the integration command exceeded its time
+limit. Full SD image assembly and Pi hardware boot remain unverified. Run
+=make check-image-derivation= for the full-lowering integration check, then the
+image build and hardware acceptance procedure.
+
+** Explicit whole-graph cross-compilation fixes and workarounds
+
+An explicit whole-graph cross-build uses =--target=aarch64-linux-gnu= on an
 x86-64 build machine. The fixes below address failures in the pinned upstream
-recipes; select their variants explicitly or use the Pi base OS, which integrates
-the applicable image fixes. Run commands from this channel's root with
+recipes and remain available for explicit selection. The native-first Pi base OS
+does not select them. Run commands from this channel's root with
 =-L modules= to test working-tree changes rather than an older installed channel.
 
 *** Native and cross-build selection
@@ -133,9 +263,9 @@ fix applies to native AArch64 builds as well as cross-builds targeting AArch64.
 
 *** Modules
 
-1. *Time services: cross-fixed reference NTP in the Pi baseline.*
-   =modules/gnu/system/images/raspberrypi.scm= uses =ntp-service-type=
-   with Guix's default server pool and large initial clock adjustment
+1. *Time services: optional cross-fixed reference NTP.*
+   The Pi baseline uses upstream =ntp-service-type= with Guix's default server
+   pool and large initial clock adjustment
    (=allow-large-adjustment?=, supplying =ntpd -g=):
 
    #+begin_src scheme
@@ -149,6 +279,7 @@ fix applies to native AArch64 builds as well as cross-builds targeting AArch64.
    permits a large clock error at startup, not unrestricted large adjustments
    throughout the daemon's lifetime.
 
+   Whole-graph cross configurations can select the variant shown above.
    =ntp/cross-fixed= retains =update-leap= and its HTTPS dependencies. The
    =(spartan packages tls)= variant =perl-net-ssleay/cross-fixed= runs native
    Perl/MakeMaker with the target Perl configuration and headers, and probes
@@ -251,8 +382,8 @@ fix applies to native AArch64 builds as well as cross-builds targeting AArch64.
 
    =alsa-utils/cross-fixed= selects the corrected library and explicitly adds
    target =coreutils-minimal= for =cat= in the installed udev rule.
-   =package-with-cross-fixed-alsa= rewrites explicit dependencies, and the Pi
-   base OS applies it to its udev rules. No tests are disabled, audio rules
+   =package-with-cross-fixed-alsa= rewrites explicit dependencies for consumers
+   selecting the variant. No tests are disabled, audio rules
    are retained, and native ALSA recipes are unchanged.
    Adding target =coreutils-minimal= also fixes the subsequent
    =patch-alsactl-udev-rules= failure looking for =bin/cat= in target inputs.
@@ -266,14 +397,14 @@ fix applies to native AArch64 builds as well as cross-builds targeting AArch64.
    =groff/cross-fixed= and =groff-minimal/cross-fixed=. Cross builds select
    native =groff= and =pdfmom=, set =GROFF_BIN_PATH= to the native =bin/=
    directory, and make =GROFF_COMMAND= follow =GROFFBIN=. Documentation is
-   retained and native derivations are unchanged. The Pi base OS applies
-   =package-with-cross-fixed-groff= to its packages, including =man-db=.
+   retained and native derivations are unchanged. Whole-graph cross consumers can
+   apply =package-with-cross-fixed-groff= to packages such as =man-db=.
 
    Apply this rewrite before =package-with-cortex-a53-guile= when composing
    both helpers. The latter can clone dependencies, so applying the Groff
-   replacement afterward can miss the original package objects. The Pi base
-   OS uses =(compose package-with-cortex-a53-guile
-   package-with-cross-fixed-groff)= to preserve both fixes.
+   replacement afterward can miss the original package objects. Compose as
+   =(compose package-with-cortex-a53-guile package-with-cross-fixed-groff)=
+   when explicitly selecting both fixes.
 
 9. *BIND: omit the obsolete target PLY dependency.*
    =(spartan packages dns)= provides =isc-bind/cross-fixed=. The pinned BIND
@@ -289,7 +420,7 @@ fix applies to native AArch64 builds as well as cross-builds targeting AArch64.
    The variant removes only =python-ply= from cross-build inputs. It retains
    Python, all build phases, the =out= and =utils= outputs, and BIND's DNS
    utilities. Native derivations remain identical to upstream. The homelab
-   Pi management host selects this variant for its additional BIND package;
+   Pi management host now selects upstream BIND with native compilation;
    the channel's barebones OS does not include BIND. This is a correction to
    BIND's dependency list, not general cross-build support for =pyproject=.
 
@@ -344,8 +475,8 @@ fix applies to native AArch64 builds as well as cross-builds targeting AArch64.
     corrected gnuplot/RRDtool dependencies above.
 
     =(spartan packages admin)= exports =htop/cross-fixed=, encapsulating this
-    dependency rewrite. The homelab selects that package directly, then applies
-    its Cortex-A53 Guile rewrite as usual:
+     dependency rewrite. Explicit whole-graph cross configurations can select
+     that package directly:
 
     #+begin_src scheme
     (use-modules (spartan packages admin))
@@ -375,7 +506,7 @@ Perl cross-configuration phase.
 =tests/ntp.scm=, =tests/linux.scm=, =tests/groff.scm=, =tests/dns.scm= and
 =tests/monitoring.scm= check
 dependency selection and unchanged native x86-64/AArch64 derivations. The image tests
-check selection of the corrected udev rules and =man-db= dependency before
+check selection of upstream udev rules and =man-db= dependencies before
 and after image conversion. The SRFI-64 suites and selected Guix lint checks
 passed; these checks do not constitute a boot test or a complete image build.
 BIND retains upstream lint findings for its =nghttp2= input label and its
@@ -397,9 +528,10 @@ guix build -L modules --target=aarch64-linux-gnu --no-grafts \
   -e '(@ (spartan packages admin) htop/cross-fixed)'
 #+end_src
 
-With these fixes selected, the homelab's Pi management image =--dry-run=
-successfully lowers its dependency graph and reports the pending builds and
-downloads. A completed dry run does not establish that every remaining package
+Earlier whole-graph cross evaluation with these fixes selected successfully
+lowered the homelab's Pi management image and reported pending builds and
+downloads. The active native-first configuration instead uses the mixed policy
+above. A completed dry run does not establish that every remaining package
 builds or that the resulting image boots on hardware.
 
 *** Related image and runtime corrections
@@ -427,7 +559,7 @@ building for AArch64, natively or by cross-compilation. Existing linker flags
 are preserved. JIT support remains enabled.
 
 The Pi 3 OS uses =package-with-cortex-a53-guile= for its system packages,
-Guix service package and Shepherd runtime, including their explicit Guile
+Guix service package and Shepherd runtime, including their explicit runtime Guile
 extension dependencies. The Shepherd override belongs in =essential-services=
 so it replaces the default instance rather than adding a second root service.
 Consumers adding Guile-dependent packages should apply the same helper.
@@ -452,8 +584,15 @@ graphs, partition layout and mounts, root resizing, the real boot initializer,
 the 64-bit firmware override, resize command execution and filesystem-specific
 tool dependencies. Resize tests use a synthetic sysfs tree and harmless
 commands, requiring no block devices or root privileges.
-=make check-image= lowers the AArch64 image derivation without building a kernel
-or SD image. Override =TARGET= to evaluate another cross target where supported.
+=make check-image= and =make check-discovery= dry-run the AArch64 image and
+named discovery. A dry run may stop at the first prerequisite group needed for
+graft analysis, rather than enumerate the entire image graph. The explicit
+=make check-image-derivation= integration target resolves the complete image
+derivation, realizing graft prerequisites as needed; it can build custom Guix,
+Shepherd and their extensions and requires AArch64 execution for native cache
+misses. Override =SYSTEM= to select another native image system where supported. The optional
+=tests/runtime/mixed.scm= check requires AArch64 execution and builds packages;
+it is deliberately separate from =make check=.
 
 For a Guix matching CI's revision, with a separate pinned Nonguix checkout:
 
@@ -480,7 +619,7 @@ The ordinary =check= and =check-image= targets exercise working-tree source
 through =-L modules=.
 
 GitHub Actions runs this real-channel bootstrap, all regression tests, the
-cross-build graph and named discovery on pushes to =main=, pull requests and
+native image graph with mixed compilation and named discovery on pushes to =main=, pull requests and
 manual dispatch. Actions are commit-pinned, with Dependabot updates enabled.
 CI evaluation is separate from a full image build and hardware boot testing.
 

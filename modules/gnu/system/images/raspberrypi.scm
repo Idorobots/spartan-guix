@@ -13,9 +13,7 @@
   #:use-module (nongnu packages linux)
   #:use-module (spartan bootloader raspberrypi)
   #:use-module (spartan packages guile)
-  #:use-module (spartan packages groff)
-  #:use-module (spartan packages linux)
-  #:use-module (spartan packages ntp)
+  #:use-module (spartan packages mixed)
   #:use-module (spartan services file-systems)
   #:export (%rpi-root-file-system
             %rpi-boot-file-system
@@ -54,12 +52,10 @@
    (host-name "raspberrypi3")
    (timezone "Etc/UTC")
    (locale "en_US.utf8")
-   (kernel linux-arm64-generic)
+   (kernel (package-with-compilation-system linux-arm64-generic))
    (firmware (list linux-firmware))
    (initrd-modules '())
-   (packages (map (compose package-with-cortex-a53-guile
-                           package-with-cross-fixed-groff)
-                  %base-packages))
+   (packages (map package-with-cortex-a53-guile %base-packages))
    (essential-services
     (modify-services (operating-system-default-essential-services this-operating-system)
       (shepherd-root-service-type config =>
@@ -76,16 +72,9 @@
             %base-file-systems))
    (services
     (cons* (service dhcpcd-service-type)
-           (service ntp-service-type
-                    (ntp-configuration
-                     (ntp ntp/cross-fixed)))
+            (service ntp-service-type)
            %rpi-resize-file-system-service
            (modify-services %base-services
-             (udev-service-type config =>
-               (udev-configuration
-                (inherit config)
-                (rules (map package-with-cross-fixed-alsa
-                            (udev-configuration-rules config)))))
              (guix-service-type config =>
                (guix-configuration
                 (inherit config)

@@ -28,23 +28,14 @@
      (list (cons groff groff/cross-fixed)
            (cons groff-minimal groff-minimal/cross-fixed)))))
 
-(test-assert "man-db selects corrected Groff before and after image conversion"
+(test-assert "man-db selects upstream Groff before and after image conversion"
   (every
    (lambda (os)
      (let ((man (find (lambda (p)
                         (and (package? p) (string=? (package-name p) "man-db")))
                       (operating-system-packages os))))
-       (and man
-            ;; The subsequent Cortex-A53 rewrite can clone the package;
-            ;; check the selected cross recipe rather than object identity.
-            (parameterize ((%current-target-system "aarch64-linux-gnu"))
-              (let* ((groff (lookup-package-input man "groff-minimal"))
-                     (phases (apply (lambda* (#:key phases #:allow-other-keys)
-                                      phases)
-                                    (package-arguments groff))))
-                (string-contains
-                 (format #f "~s" (gexp->approximate-sexp phases))
-                 "use-native-documentation-commands"))))))
+        (and man (eq? groff-minimal
+                      (lookup-package-input man "groff-minimal")))))
    (list rpi3-barebones-os
          (operating-system-for-image
           (os->image rpi3-barebones-os #:type rpi-image-type)))))

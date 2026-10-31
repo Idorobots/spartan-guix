@@ -2,6 +2,7 @@
              (gnu bootloader u-boot)
              (gnu image)
              (gnu packages raspberry-pi)
+             (gnu packages ntp)
              (gnu services networking)
              (gnu services ssh)
              (gnu system image)
@@ -11,7 +12,6 @@
              (guix packages)
              (ice-9 textual-ports)
              (spartan bootloader raspberrypi)
-             (spartan packages ntp)
              (spartan services file-systems)
              (srfi srfi-1)
              (srfi srfi-64))
@@ -36,7 +36,7 @@
           (map service-kind %base-services))
   (map service-kind (operating-system-user-services rpi3-barebones-os)))
 
-(test-assert "barebones and converted images retain one patched NTP with large initial adjustments"
+(test-assert "barebones and converted images retain stock NTP with large initial adjustments"
   (every
    (lambda (system)
      (let* ((time-services
@@ -44,7 +44,7 @@
                      (operating-system-user-services system)))
             (config (and (= 1 (length time-services))
                          (service-value (car time-services)))))
-       (and config (eq? ntp/cross-fixed (ntp-configuration-ntp config))
+       (and config (eq? ntp (ntp-configuration-ntp config))
             (ntp-allow-large-adjustment? config)
             (not (service-of-type system openntpd-service-type)))))
    (list rpi3-barebones-os converted)))

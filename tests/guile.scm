@@ -62,7 +62,7 @@
 
 (define (runtime-guiles package)
   (filter (lambda (p) (and (package? p) (string=? "guile" (package-name p))))
-          (cons package (map cadr (package-transitive-inputs package)))))
+          (cons package (map cadr (package-transitive-target-inputs package)))))
 
 (test-assert "profile, Guix and Shepherd select corrected Guile before and after conversion"
   (every

@@ -43,7 +43,7 @@
          (equal? (assoc-ref (bag-host-inputs bag) "alsa-lib")
                  (list alsa-lib/cross-fixed)))))
 
-(test-assert "udev retains ALSA rules with the corrected library before and after conversion"
+(test-assert "udev retains upstream ALSA rules before and after conversion"
   (every
    (lambda (os)
      (let* ((services (operating-system-services os))
@@ -52,9 +52,8 @@
                           (and (package? item)
                                (string=? "alsa-utils" (package-name item))))
                         (udev-configuration-rules config))))
-        (and alsa
-             (parameterize ((%current-target-system "aarch64-linux-gnu"))
-               (eq? alsa-lib/cross-fixed (lookup-package-input alsa "alsa-lib"))))))
+         (and (eq? alsa alsa-utils)
+              (eq? alsa-lib (lookup-package-input alsa "alsa-lib")))))
    (list rpi3-barebones-os
          (operating-system-for-image
           (os->image rpi3-barebones-os #:type rpi-image-type)))))

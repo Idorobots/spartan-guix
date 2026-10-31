@@ -34,5 +34,5 @@ jobs:
         run: guix time-machine -C channels-ci.scm -- describe -f channels
       - name: Run filesystem service and Raspberry Pi regression tests
         run: make check GUIX='guix time-machine -C channels-ci.scm --'
-      - name: Evaluate AArch64 cross-build and named image discovery
+      - name: Dry-run AArch64 mixed-compilation image and named discovery
         run: make check-image check-discovery GUIX='guix time-machine -C channels-ci.scm --'
