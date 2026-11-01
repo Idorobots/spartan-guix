@@ -22,11 +22,19 @@
              (guix utils)
              (nongnu packages linux)
              (spartan packages guile)
+             (spartan packages guile-config)
+             (spartan packages guile-snarf)
              (spartan packages mixed)
              (srfi srfi-1)
              (srfi srfi-64))
 
 (test-begin "mixed-compilation")
+
+(define guile-3.0/rpi3 (rpi3-package guile-3.0))
+(define guile-3.0-latest/rpi3 (rpi3-package guile-3.0-latest))
+(define sdk-fixes (compose guile-with-native-snarf guile-with-native-config))
+(define* (sdk-package p #:key (system %system))
+  ((make-guile-runtime-rewriter #:guile-transform sdk-fixes #:system system) p))
 
 (define routed
   (package-with-compilation-system hello #:system "x86_64-linux"))
@@ -55,18 +63,18 @@
          (not (bag-target (package->bag p "aarch64-linux" #f))))))
 
 (test-assert "runner-native tools never receive a cross target"
-  (not (bag-target (package->bag guile-3.0/cortex-a53 %system #f))))
+  (not (bag-target (package->bag guile-3.0/rpi3 %system #f))))
 
 (test-assert "Guile outputs, search paths and kernel properties survive adaptation"
-  (and (equal? (package-outputs guile-3.0) (package-outputs guile-3.0/cortex-a53))
+  (and (equal? (package-outputs guile-3.0) (package-outputs guile-3.0/rpi3))
        (equal? (package-native-search-paths guile-3.0)
-               (package-native-search-paths guile-3.0/cortex-a53))
+                (package-native-search-paths guile-3.0/rpi3))
        (equal? (package-properties linux-arm64-generic)
                (package-properties (operating-system-kernel rpi3-barebones-os)))))
 
 (test-assert "unaffected base packages retain upstream object identity"
-  (and (eq? hello (package-with-cortex-a53-guile hello))
-       (eq? man-db (package-with-cortex-a53-guile man-db))
+  (and (eq? hello (rpi3-package hello))
+       (eq? man-db (rpi3-package man-db))
        (memq man-db (operating-system-packages rpi3-barebones-os))))
 
 (define consumer
@@ -75,7 +83,7 @@
     (inputs `(("guile" ,guile-3.0 "debug")))
     (propagated-inputs (list guile-3.0-latest))
     (native-inputs (list guile-3.0 hello))))
-(define rewritten (package-with-cortex-a53-guile consumer))
+(define rewritten (rpi3-package consumer))
 
 (define replacement-dependency
   (package (inherit hello) (version "replacement")))
@@ -88,19 +96,19 @@
 
 (test-assert "runtime rewrite preserves outputs and aligns duplicate native Guile inputs"
   (and (equal? (assoc "guile" (package-inputs rewritten))
-               (list "guile" guile-3.0/cortex-a53 "debug"))
-       (eq? guile-3.0-latest/cortex-a53
+               (list "guile" guile-3.0/rpi3 "debug"))
+       (eq? guile-3.0-latest/rpi3
             (lookup-package-propagated-input rewritten "guile"))
-       (eq? guile-3.0/cortex-a53 (lookup-package-native-input rewritten "guile"))
+       (eq? guile-3.0/rpi3 (lookup-package-native-input rewritten "guile"))
        (eq? hello (lookup-package-native-input rewritten "hello"))
-       (eq? rewritten (package-with-cortex-a53-guile consumer))))
+       (eq? rewritten (rpi3-package consumer))))
 
 (test-assert "build-only Guile does not cause unrelated packages to be rewritten"
   (let ((p (package (inherit hello) (native-inputs (list guile-3.0)))))
-    (eq? p (package-with-cortex-a53-guile p))))
+    (eq? p (rpi3-package p))))
 
 (test-assert "Guile runtime rewrite accepts an explicit AArch64 compilation platform"
-  (let* ((selected (package-with-cortex-a53-guile guile-3.0
+  (let* ((selected (rpi3-package guile-3.0
                                                 #:system "aarch64-linux"))
          (bag (package->bag selected "aarch64-linux" #f)))
     (and (string=? "aarch64-linux" (bag-system bag))
@@ -111,8 +119,8 @@
 (test-assert "selected consumers cross-build on x86 and build natively on AArch64"
   (every
    (lambda (base)
-     (let* ((cross (package-with-cortex-a53-guile base #:system "x86_64-linux"))
-            (native (package-with-cortex-a53-guile base #:system "aarch64-linux"))
+     (let* ((cross (rpi3-package base #:system "x86_64-linux"))
+            (native (rpi3-package base #:system "aarch64-linux"))
             (cross-bag (package->bag cross "aarch64-linux" #f))
             (native-bag (package->bag native "aarch64-linux" #f)))
        (and (string=? "x86_64-linux" (bag-system cross-bag))
@@ -128,15 +136,15 @@
                  (%current-target-system "aarch64-linux-gnu"))
     (every
      (lambda (base)
-       (let ((p (package-with-cortex-a53-guile base #:system "x86_64-linux")))
+       (let ((p (rpi3-package base #:system "x86_64-linux")))
          (and (equal? (package-native-inputs base) (package-native-inputs p))
-              (eq? (package-with-cortex-a53-guile (lookup-package-input base "guile")
+              (eq? (rpi3-package (lookup-package-input base "guile")
                                                 #:system "x86_64-linux")
                    (lookup-package-input p "guile")))))
      selective-consumers)))
 
 (test-assert "Guix propagates cross-built SSH separately from its native build-time SSH"
-  (let* ((p (package-with-cortex-a53-guile guix #:system "x86_64-linux"))
+  (let* ((p (rpi3-package guix #:system "x86_64-linux"))
          (runtime
           (parameterize ((%current-system "aarch64-linux") (%current-target-system #f))
             (lookup-package-propagated-input p "guile-ssh")))
@@ -154,7 +162,7 @@
 
 (test-assert "Shepherd propagates target Fibers separately from native build-time Fibers"
   (parameterize ((%current-system "aarch64-linux") (%current-target-system #f))
-    (let* ((p (package-with-cortex-a53-guile shepherd-1.0 #:system "x86_64-linux"))
+    (let* ((p (rpi3-package shepherd-1.0 #:system "x86_64-linux"))
            (runtime (lookup-package-propagated-input p "guile-fibers"))
            (build (lookup-package-native-input p "guile-fibers"))
            (runtime-bag (package->bag runtime "aarch64-linux" #f))
@@ -187,7 +195,7 @@
     (parameterize ((%current-system "aarch64-linux") (%current-target-system #f))
       (every
        (lambda (system)
-         (let* ((p (package-with-cortex-a53-guile guile-readline #:system system))
+         (let* ((p (rpi3-package guile-readline #:system system))
                 (guile (lookup-package-input p "guile"))
                 (bag (package->bag p "aarch64-linux" #f)))
            (and (equal? (package-propagated-inputs guile)
@@ -202,9 +210,26 @@
    (lambda (system)
      (test-assert (string-append "Readline and interactive Guile share a profile, compiled on " system)
        (collision-free?
-        (map (lambda (p) (package-with-cortex-a53-guile p #:system system))
+        (map (lambda (p) (rpi3-package p #:system system))
              (list guile-readline guile-3.0-latest)))))
    '("x86_64-linux" "aarch64-linux"))
+
+  (test-assert "SDK-only profiles share libraries and consumers retain cross/native routing"
+    (every
+     (lambda (system)
+       (let ((target (and (not (string=? system "aarch64-linux"))
+                          "aarch64-linux-gnu")))
+         (and (collision-free?
+               (map (lambda (p) (sdk-package p #:system system))
+                    (list guile-readline guile-3.0-latest)))
+              (every
+               (lambda (base)
+                 (let ((bag (package->bag (sdk-package base #:system system)
+                                         "aarch64-linux" #f)))
+                   (and (string=? system (bag-system bag))
+                        (equal? target (bag-target bag)))))
+               selective-consumers))))
+     '("x86_64-linux" "aarch64-linux")))
 
   (test-assert "combined base system profiles have no collisions before or after image conversion"
     (every
@@ -221,25 +246,22 @@
        (same-derivation?
         (package-derivation store (cdr pair) "aarch64-linux" #:graft? #f)
         (direct-derivation (car pair))))
-     (list (cons ((@@ (spartan packages guile) guile-with-cortex-a53-fix) guile-3.0)
-                 guile-3.0/cortex-a53)
-           (cons ((@@ (spartan packages guile) guile-with-cortex-a53-fix)
-                  guile-3.0-latest)
-                 guile-3.0-latest/cortex-a53)
+     (list (cons (rpi3-guile-fixes guile-3.0) guile-3.0/rpi3)
+           (cons (rpi3-guile-fixes guile-3.0-latest) guile-3.0-latest/rpi3)
            (cons linux-arm64-generic
                  (operating-system-kernel rpi3-barebones-os)))))
 
   (test-assert "same-platform Guile adapter has the exact native derivation"
-    (let* ((base ((@@ (spartan packages guile) guile-with-cortex-a53-fix) guile-3.0))
+    (let* ((base (rpi3-guile-fixes guile-3.0))
            (p (package-with-compilation-system base #:system "aarch64-linux")))
       (same-derivation? (package-derivation store base "aarch64-linux" #:graft? #f)
                         (package-derivation store p "aarch64-linux" #:graft? #f))))
 
   (test-assert "native consumers reference routed Guile without an upstream duplicate"
-    (let* ((p (package-with-cortex-a53-guile guile-zlib))
+    (let* ((p (rpi3-package guile-zlib))
            (drv (package-derivation store p "aarch64-linux" #:graft? #f))
            (inputs (map derivation-input-path (derivation-inputs drv)))
-           (selected (package-derivation store guile-3.0/cortex-a53 "aarch64-linux"
+           (selected (package-derivation store guile-3.0/rpi3 "aarch64-linux"
                                          #:graft? #f))
            (upstream (package-derivation store guile-3.0 "aarch64-linux" #:graft? #f)))
       (and (string=? "aarch64-linux" (derivation-system drv))
@@ -251,14 +273,14 @@
      (lambda (base)
        (let* ((base-guile (lookup-package-input base "guile"))
               (selected (package-derivation
-                         store (package-with-cortex-a53-guile base-guile
+                         store (rpi3-package base-guile
                                                              #:system "x86_64-linux")
                          "aarch64-linux" #:graft? #f))
               (build-guile (package-derivation store base-guile "x86_64-linux"
                                                #:graft? #f))
               (upstream (package-derivation store base-guile "aarch64-linux"
                                             #:graft? #f))
-              (p (package-with-cortex-a53-guile base #:system "x86_64-linux"))
+              (p (rpi3-package base #:system "x86_64-linux"))
               (drv (package-derivation store p "aarch64-linux" #:graft? #f))
               (inputs (map derivation-input-path (derivation-inputs drv))))
          (and (string=? "x86_64-linux" (derivation-system drv))
@@ -294,9 +316,9 @@
 
   (test-assert "propagated profile inputs match the selected cross dependencies"
     (parameterize ((%current-system "aarch64-linux") (%current-target-system #f))
-      (let* ((base ((@@ (spartan packages guile) guile-with-cortex-a53-fix) guile-3.0))
+      (let* ((base (rpi3-guile-fixes guile-3.0))
              (dependencies (package-propagated-inputs base))
-             (entry (package->manifest-entry guile-3.0/cortex-a53 "debug")))
+             (entry (package->manifest-entry guile-3.0/rpi3 "debug")))
         (and (string=? "debug" (manifest-entry-output entry))
              (equal? (package-native-search-paths base)
                      (manifest-entry-search-paths entry))

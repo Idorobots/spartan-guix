@@ -141,34 +141,71 @@ Apply recipe changes to the underlying package before wrapping it. The adapter
 delegates to that original recipe, rather than interpreting subsequent inherited
 argument or input overrides on the adapter as a new recipe.
 
-=(spartan packages guile)= routes =guile-3.0/cortex-a53= and
-=guile-3.0-latest/cortex-a53= through this adapter. The
-=package-with-cortex-a53-guile= helper rewrites explicit runtime dependencies,
-including propagated Guile extensions, and preserves upstream objects for
-unaffected packages. It leaves unrelated build-only dependencies and implicit
-build-system tools upstream. For an affected native consumer listing Guile in both
-=inputs= and =native-inputs=, both entries use the same replacement: otherwise
-the upstream native entry wins =PATH= and =PKG_CONFIG_PATH=, causing configure to
-select the wrong interpreter or link against upstream =libguile=.
+*** Independent recipe fixes and board policy
+
+Recipe fixes are independent of the compilation platform:
+
+| Module | Export | Change |
+|--------+--------+--------|
+| =(spartan packages cortex-a53)= | =guile-with-cortex-a53-fix= | AArch64 erratum 843419 linker flag; JIT retained |
+| =(spartan packages guile-snarf)= | =guile-with-native-snarf= | Cross-built SDK's installed preprocessor fallback |
+| =(spartan packages guile-config)= | =guile-with-native-config= | Destination-native pkg-config in the installed SDK |
+| =(spartan packages avahi)= | =guile-avahi/namespace-aware= | Numeric foreign interface indices and serial publishing tests |
+
+The Guile transformations accept an upstream package and return a recipe, without
+wrapping Guile in the compilation adapter. They preserve its source, version,
+outputs and metadata. Their argument changes remain deferred to the build context.
+
+=(spartan packages guile)= exports =make-guile-runtime-rewriter=. It accepts a
+=#:guile-transform= (default =identity=), optional =#:replacements= recipe pairs,
+and the compilation-platform =#:system= override. No hardware, SDK or Avahi fixes
+are selected by default. It adapts both upstream Guile releases and the selected
+Guix, Shepherd, Guile-SSH and Guile-Readline consumers.
+
+The returned procedure rewrites explicit runtime and propagated dependencies,
+preserving upstream objects for unaffected packages. Recipe replacements also
+have their dependencies rewritten: an Avahi variant receives the chosen Guile.
+Unrelated build-only dependencies and implicit build-system tools stay upstream.
+For affected native consumers listing Guile in both =inputs= and =native-inputs=,
+both entries use the same replacement so =PATH= and =PKG_CONFIG_PATH= agree.
 
 For cross-built consumers, native inputs retain upstream build-machine Guile
 and tools. The helper rewrites the underlying recipe before applying the
 compilation adapter. Shepherd's propagated Fibers follows the target compilation
 route, separately from its upstream native build-time Fibers.
 
-The helper accepts the same explicit compilation-platform override:
+For an SDK-only AArch64 setup, suitable for reuse by a future Pi 4 configuration:
 
 #+begin_src scheme
 (use-modules (gnu packages guile)
-             (gnu packages package-management)
-             (spartan packages guile))
+             (gnu packages guile-xyz)
+             (spartan packages avahi)
+             (spartan packages guile)
+             (spartan packages guile-config)
+             (spartan packages guile-snarf))
 
-(package-with-cortex-a53-guile guile-3.0 #:system "aarch64-linux")
-(package-with-cortex-a53-guile guix #:system "aarch64-linux")
+(define sdk-fixes
+  (compose guile-with-native-snarf guile-with-native-config))
+(define runtime-package
+  (make-guile-runtime-rewriter
+   #:guile-transform sdk-fixes
+   #:replacements `((,guile-avahi . ,guile-avahi/namespace-aware))
+   #:system "x86_64-linux"))
+
+(runtime-package guile-3.0)
+(runtime-package guile-readline)
 #+end_src
 
-The hardware linker fix remains enabled for native AArch64 builds, with JIT
-support retained. Putting patched Guile only in the profile would not repair
+Omit =#:system= to use the Guix runner's native platform. The Pi 3 image explicitly
+composes =guile-with-cortex-a53-fix= with the two SDK fixes and selects the Avahi
+variant in =(gnu system images raspberrypi)=. Its =rpi3-package= helper accepts a
+package and an optional =#:system= override, and is used for the base profile,
+Guix service and Shepherd runtime. The previous Cortex-named runtime helper and
+precomposed Guile exports are replaced by these APIs.
+
+The Pi 3's hardware linker fix remains enabled for native AArch64 builds. SDK-only
+composition leaves it out in both native and cross modes. Putting a modified
+Guile only in the profile would not repair
 absolute interpreter/library references in its consumers. Those rewritten
 consumers have custom derivations and generally require rebuilding, even though
 unrelated packages can use upstream substitutes. Cross-built and native
@@ -193,15 +230,9 @@ remain separate acceptance checks.
 *** Shared profile libraries for Guile-Readline
 
 Upstream =make-guile-readline= copies Guile's propagated libraries into the
-Readline package. Rewriting its direct Guile input alone left that copied list
-pointing at native AArch64 libraries, while the selected Guile propagated
-cross-built copies. A combined system profile then rejected =libunistring@1.3=:
-=/gnu/store/8ql43ia80wmpgfgpnn6fp754s0xkpsf6-libunistring-1.3= from Readline
-conflicted with =/gnu/store/7hk5jm8yprqbz1q86p15n6ja0gqi76h2-libunistring-1.3=
-from Guile. They have the same version but different build derivations.
-
-An initial fix forwarded the selected Guile's propagated list to a native
-Readline build. That override has been removed: Readline now uses the same
+Readline package. Rewriting only its direct Guile input mixed native and
+cross-built =libunistring= and =libgc=, producing profile collisions even when
+the library versions matched. Readline now uses the same
 selective compilation adapter as Guile, avoiding its slow emulated build on an
 x86 runner. The adapter routes Readline's original propagated library list to
 the same compilation platform as Guile, aligning =libunistring=, =libgc= and
@@ -209,23 +240,20 @@ their dependencies in both build inputs and profile metadata. The original
 source/version is retained. An AArch64 compilation platform still selects a
 native build, and the =#:system= override remains available.
 
-The new regression checks reproduced those exact store paths before the fix.
-They now pass for Readline plus interactive Guile with either x86 or AArch64
+Regression checks cover Readline plus interactive Guile with either x86 or AArch64
 compilation selected, and for the combined barebones and management service
 profiles before and after image conversion. They use Guix's actual
 =check-for-collisions=, lowering ungrafted derivations without building profiles
 or realizing graft prerequisites. Production collision checks and grafting
 remain enabled. Image, management-image and named-discovery dry runs pass too.
 
-The cross-build dry run selects
-=/gnu/store/bjjws169p4bgwdvky9d9ii35xdhl0h1d-guile-readline-3.0.9.drv=.
-Derivation tests verify x86 build tools and patched target Guile. The actual
-cross-build and runtime loading of this Readline variant remain unverified;
-no compilation was started for this policy change. To build it explicitly:
+Derivation tests verify build-machine tools and selected target Guile. A full
+cross-build and runtime check of the current Readline variant remain separate.
+To build it explicitly with the Pi 3 policy:
 
 #+begin_src sh
 guix build -L modules --system=aarch64-linux \
-  -e '((@ (spartan packages guile) package-with-cortex-a53-guile) \
+  -e '((@ (gnu system images raspberrypi) rpi3-package)
        (@ (gnu packages guile) guile-readline))'
 #+end_src
 
@@ -237,19 +265,18 @@ preprocessor, =aarch64-linux-gnu-gcc -E=. A native AArch64 consumer instead has
 =gcc=. Autoconf's Makefile =CPP= variable is not automatically exported to the
 snarf script, so binding generation failed and left =src/*.c.x= missing.
 
-For affected GNU-build-system consumers, =package-with-cortex-a53-guile= adds
-=set-native-guile-preprocessor= after =set-paths= in native AArch64 mode. It
-exports =CPP= from the consumer's =CC=, defaulting to =gcc -E=, and honors an
-explicit, nonempty =CPP=. An empty =CPP= receives the default. Installing the
-phase after =set-paths= also supports consumers that delete =configure= or use
-Guile tools during bootstrap. Selection remains deferred to the native build
-context.
+The independent =guile-with-native-snarf= transformation corrects the installed
+script after a cross-build. It preserves nonempty =CPP=, otherwise using the
+consumer's =CC= or =gcc= with =-E=. Empty =CPP= and =CC= receive the fallback.
+The runtime rewriter no longer inserts preprocessor phases into consumers, so
+the SDK also works for callers outside that rewriter. Native Guile recipes retain
+their upstream tool defaults.
 
 The installed =guile-config= had another configure-time tool reference: Guix
 embedded its build-machine =aarch64-linux-gnu-pkg-config= wrapper, pointing at an
-x86-64 executable. Both Cortex-A53 Guile variants now replace that reference
-after installation when cross-building for AArch64. The replacement is an
-absolute store reference to native AArch64 =pkg-config= selected through the
+x86-64 executable. The independent =guile-with-native-config= transformation
+replaces that reference after a cross-build. The replacement is an
+absolute store reference to destination-native =pkg-config= selected through the
 mixed-compilation adapter, so the script can run on the Pi too. It retains
 Guile's own =PKG_CONFIG_PATH= and library/header references. This deliberately
 uses the primitive =%pkg-config= package: =pkg-config= is identifier syntax that
@@ -260,16 +287,18 @@ derivations. Rebuild the working-tree definitions using =-L modules= (or
 =-L spartan-guix/modules= from the homelab root).
 
 =tests/guile-tools.scm= checks preprocessor defaults, compiler/preprocessor
-overrides, phase preservation and the SDK tool's destination architecture. The
+overrides by executing a corrected script fixture, independent fix selection,
+SDK-only native/cross routing, and the SDK tool's destination architecture. The
 optional integration check compiles a small C extension with native AArch64
 =gcc=, generates its bindings with =guile-snarf=, obtains compile/link flags from
-=guile-config=, and loads and calls the extension under both patched Guile
-versions. Its build environment must not contain the prefixed cross compiler:
+=guile-config=, and loads and calls the extension under both Guile versions,
+with SDK-only and Pi 3 fix compositions. Its build environment must not contain
+the prefixed cross compiler:
 
 #+begin_src sh
 guix repl -L modules tests/runtime/guile-sdk.scm
 guix build -L modules --system=aarch64-linux \
-  -e '((@ (spartan packages guile) package-with-cortex-a53-guile) \
+  -e '((@ (gnu system images raspberrypi) rpi3-package)
        (@ (gnu packages guile-xyz) guile-avahi))'
 #+end_src
 
@@ -286,8 +315,9 @@ interfaces outside its network namespace.
 patch preserves a numeric index when local interface-name lookup fails, using
 the existing numeric representation accepted by the reverse conversion. This
 also covers an interface disappearing between an event and its callback.
-=package-with-cortex-a53-guile= selects this consumer variant while retaining
-the routed patched interpreter and library dependencies.
+The Pi 3 configuration selects this variant explicitly through the rewriter's
+=#:replacements=. Other configurations may opt in independently of the hardware
+and SDK fixes, while retaining their selected interpreter and library dependencies.
 
 The publishing tests also register =0.0.0.0= under different host names and
 compete for its reverse-PTR record when run concurrently against the same
@@ -296,7 +326,10 @@ serially. The initial Scheme/FFI smoke check did not exercise these network
 callbacks; actual native extension and package builds are required to catch
 them.
 
-*** Selectively compiling Shepherd and Guile-SSH
+*** Earlier Shepherd and Guile-SSH builds
+
+The following diagnoses and successful builds predate the modular SDK refactor.
+Their store paths are historical; the current composed recipes need rebuilding.
 
 The next image prerequisite, Guile-SSH 1.0.0, compiled successfully but failed
 the client/server, pipe, shell, tunnel and distributed-execution tests. The six
@@ -329,10 +362,10 @@ Reproduce the selected package build independently of the image:
 
 #+begin_src sh
 guix build -L modules --system=aarch64-linux --keep-failed \
-  -e '((@ (spartan packages guile) package-with-cortex-a53-guile) \
+  -e '((@ (gnu system images raspberrypi) rpi3-package)
         (@ (gnu packages ssh) guile-ssh))'
 guix build -L modules --system=aarch64-linux --keep-failed \
-  -e '((@ (spartan packages guile) package-with-cortex-a53-guile) \
+  -e '((@ (gnu system images raspberrypi) rpi3-package)
        (@ (gnu packages admin) shepherd-1.0))'
 guix repl -L modules tests/runtime/mixed-consumers.scm
 #+end_src
@@ -352,7 +385,7 @@ check is separate from full native runtime-suite coverage.
 
 *** Selectively compiling Guix
 
-Guix is also selected by =package-with-cortex-a53-guile= for compilation through
+Guix is also selected by the runtime rewriter for compilation through
 the adapter, with the same runner-native default and =#:system= override. This
 replaces its earlier native AArch64/emulated build on an x86 runner. Its recipe
 and source remain upstream; runtime dependency rewriting precedes adaptation.
@@ -367,14 +400,30 @@ verification of this policy change did not restart them. To build Guix explicitl
 
 #+begin_src sh
 guix build -L modules --system=aarch64-linux \
-  -e '((@ (spartan packages guile) package-with-cortex-a53-guile) \
+  -e '((@ (gnu system images raspberrypi) rpi3-package)
        (@ (gnu packages package-management) guix))'
 #+end_src
 
 Graft analysis may still realize remaining prerequisites even for an image
 =--derivation=. Full image resolution, assembly and hardware boot remain pending.
 
-*** Verification after the native SDK fixes
+*** Modular-fix verification
+
+- All 135 channel checks and 15 management-image checks pass. The ten SDK checks
+  include executed preprocessor-selection fixtures, independent opt-in, and
+  SDK-only native/cross compilation without the Cortex-A53 flag. The 25 mixed
+  checks include profile collision checks for both SDK-only and Pi 3 policies.
+- Barebones, named-discovery and management-image dry runs pass. A standalone
+  SDK-only Guile-Readline dry run also passes.
+- No package compilation was started for this refactor. The installed-snarf
+  correction changes Guile and consumer derivations. Rebuilding and rerunning
+  =tests/runtime/guile-sdk.scm= for both compositions is still required for full
+  SDK integration validation. Full image assembly and hardware boot remain pending.
+
+*** Verification before the modular SDK refactor (historical)
+
+These build results predate the installed =guile-snarf= correction and refer to
+older derivations. They do not verify a rebuild of the current composed recipes.
 
 - All 131 channel regression checks and all 15 homelab management-image checks
   passed. The seven =native-guile-tools= checks cover the SDK input architecture,
@@ -399,11 +448,10 @@ Graft analysis may still realize remaining prerequisites even for an image
   propagation fix. The Guix package dry run passed; the full cross-build is
   unverified and all previously started build jobs are stopped.
 
-The new Guile outputs are
+The historical Guile outputs were
 =/gnu/store/q50jvm5359hsg9fy31xv16g0nfl5m7nq-guile-3.0.9= and
 =/gnu/store/a7ncnzkx4nhbkslx5cq736ybvwq3lww4-guile-3.0.11=, with their respective
-debug outputs retained. Use the working-tree image command above to resume the
-remaining native Guile-consumer builds with these corrections.
+debug outputs retained. Current working-tree recipes have new derivations.
 
 *** Initial mixed-compilation verification
 
@@ -621,10 +669,11 @@ fix applies to native AArch64 builds as well as cross-builds targeting AArch64.
    retained and native derivations are unchanged. Whole-graph cross consumers can
    apply =package-with-cross-fixed-groff= to packages such as =man-db=.
 
-   Apply this rewrite before =package-with-cortex-a53-guile= when composing
-   both helpers. The latter can clone dependencies, so applying the Groff
+   Apply this rewrite before the procedure returned by
+   =make-guile-runtime-rewriter= when composing both helpers. The latter can
+   clone dependencies, so applying the Groff
    replacement afterward can miss the original package objects. Compose as
-   =(compose package-with-cortex-a53-guile package-with-cross-fixed-groff)=
+   =(compose runtime-package package-with-cross-fixed-groff)=
    when explicitly selecting both fixes.
 
 9. *BIND: omit the obsolete target PLY dependency.*
@@ -773,13 +822,14 @@ builds or that the resulting image boots on hardware.
 
 *** Cortex-A53 Guile linker workaround
 
-=(spartan packages guile)= provides =guile-3.0/cortex-a53= and
-=guile-3.0-latest/cortex-a53=. They retain the upstream versions and build
-settings, appending =-Wl,--fix-cortex-a53-843419= to =LDFLAGS= only when
+=(spartan packages cortex-a53)= provides =guile-with-cortex-a53-fix=.
+It preserves the upstream version and build settings of its input recipe,
+appending =-Wl,--fix-cortex-a53-843419= to =LDFLAGS= only when
 building for AArch64, natively or by cross-compilation. Existing linker flags
 are preserved. JIT support remains enabled.
 
-The Pi 3 OS uses =package-with-cortex-a53-guile= for its system packages,
+The Pi 3 OS explicitly composes this fix with its SDK fixes and uses
+=rpi3-package= from =(gnu system images raspberrypi)= for its system packages,
 Guix service package and Shepherd runtime, including their explicit runtime Guile
 extension dependencies. The Shepherd override belongs in =essential-services=
 so it replaces the default instance rather than adding a second root service.

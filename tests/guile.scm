@@ -9,7 +9,7 @@
              (guix gexp)
              (guix packages)
              (guix utils)
-             (spartan packages guile)
+             (spartan packages cortex-a53)
              (srfi srfi-1)
              (srfi srfi-64))
 
@@ -24,8 +24,8 @@
       (eval (gexp->approximate-sexp flags) (current-module)))))
 
 (define variants
-  (list (cons guile-3.0 guile-3.0/cortex-a53)
-        (cons guile-3.0-latest guile-3.0-latest/cortex-a53)))
+  (map (lambda (base) (cons base (guile-with-cortex-a53-fix base)))
+       (list guile-3.0 guile-3.0-latest)))
 
 (test-assert "AArch64 native and cross links enable 843419 without disabling JIT"
   (every
@@ -54,7 +54,7 @@
                  (substitute-keyword-arguments (package-arguments guile-3.0-latest)
                    ((#:configure-flags flags)
                     #~(cons "LDFLAGS=-Wl,--as-needed" #$flags))))))
-         (fixed ((@@ (spartan packages guile) guile-with-cortex-a53-fix) base))
+         (fixed (guile-with-cortex-a53-fix base))
          (flags (configure-flags fixed "x86_64-linux" "aarch64-linux-gnu")))
     (and (member "LDFLAGS=-Wl,--as-needed -Wl,--fix-cortex-a53-843419" flags)
          (= 1 (count (lambda (flag) (string-prefix? "LDFLAGS=" flag)) flags)))))
@@ -78,8 +78,8 @@
                          (append (operating-system-packages os)
                                  (list (guix-configuration-guix guix-config)
                                        (shepherd-configuration-shepherd shepherd-config))))))
-       (and (memq guile-3.0-latest/cortex-a53 guiles)
-            (memq guile-3.0/cortex-a53 guiles)
+       (and (memq (rpi3-package guile-3.0-latest) guiles)
+            (memq (rpi3-package guile-3.0) guiles)
             (not (memq guile-3.0 guiles))
             (not (memq guile-3.0-latest guiles)))))
    (list rpi3-barebones-os converted)))

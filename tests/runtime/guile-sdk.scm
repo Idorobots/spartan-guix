@@ -3,14 +3,22 @@
 (use-modules (gnu packages base)
              (gnu packages guile)
              (gnu packages pkg-config)
+             (gnu system images raspberrypi)
              (guix derivations)
              (guix gexp)
              (guix packages)
              (guix store)
-             (spartan packages guile))
+             (spartan packages guile)
+             (spartan packages guile-config)
+             (spartan packages guile-snarf)
+             (srfi srfi-1))
 
-(define (sdk-check guile)
-  (package-with-cortex-a53-guile
+(define sdk-package
+  (make-guile-runtime-rewriter
+   #:guile-transform (compose guile-with-native-snarf guile-with-native-config)))
+
+(define (sdk-check guile rewrite)
+  (rewrite
    (package
      (inherit hello)
      (name "native-guile-sdk-check")
@@ -68,9 +76,12 @@
 
 (with-store store
   (let ((derivations
-         (map (lambda (guile)
-                (package-derivation store (sdk-check guile) "aarch64-linux"))
-              (list guile-3.0 guile-3.0-latest))))
+         (append-map
+          (lambda (rewrite)
+            (map (lambda (guile)
+                   (package-derivation store (sdk-check guile rewrite) "aarch64-linux"))
+                 (list guile-3.0 guile-3.0-latest)))
+          (list sdk-package rpi3-package))))
     (build-derivations store derivations)
     (for-each (lambda (drv)
                 (format #t "PASS: native guile-snarf, guile-config and C extension: ~a~%"

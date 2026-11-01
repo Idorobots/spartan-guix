@@ -1,6 +1,7 @@
 (define-module (gnu system images raspberrypi)
   #:use-module (gnu bootloader)
   #:use-module (gnu image)
+  #:use-module ((gnu packages guile-xyz) #:select (guile-avahi))
   #:use-module (gnu services)
   #:use-module (gnu services base)
   #:use-module (gnu services networking)
@@ -8,17 +9,24 @@
   #:use-module (gnu system)
   #:use-module (gnu system file-systems)
   #:use-module (gnu system image)
+  #:use-module ((guix config) #:select (%system))
   #:use-module (guix gexp)
   #:use-module (guix platforms arm)
   #:use-module (nongnu packages linux)
   #:use-module (spartan bootloader raspberrypi)
+  #:use-module (spartan packages avahi)
+  #:use-module (spartan packages cortex-a53)
   #:use-module (spartan packages guile)
+  #:use-module (spartan packages guile-config)
+  #:use-module (spartan packages guile-snarf)
   #:use-module (spartan packages mixed)
   #:use-module (spartan services file-systems)
   #:export (%rpi-root-file-system
             %rpi-boot-file-system
             %rpi-resize-file-system-service
             rpi-image-type
+            rpi3-guile-fixes
+            rpi3-package
             rpi3-barebones-os
             rpi3-barebones-raw-image))
 
@@ -28,6 +36,22 @@
 
 (define %rpi-root-label "Guix")
 (define %rpi-boot-label "PIBOOT")
+
+(define rpi3-guile-fixes
+  (compose guile-with-cortex-a53-fix
+           guile-with-native-snarf
+           guile-with-native-config))
+
+(define %rpi3-package-replacements
+  `((,guile-avahi . ,guile-avahi/namespace-aware)))
+
+(define* (rpi3-package package #:key (system %system))
+  "Apply the Pi 3's explicit fixes and mixed compilation policy to PACKAGE."
+  ((make-guile-runtime-rewriter
+    #:guile-transform rpi3-guile-fixes
+    #:replacements %rpi3-package-replacements
+    #:system system)
+   package))
 
 (define %rpi-root-file-system
   (file-system
@@ -55,13 +79,13 @@
    (kernel (package-with-compilation-system linux-arm64-generic))
    (firmware (list linux-firmware))
    (initrd-modules '())
-   (packages (map package-with-cortex-a53-guile %base-packages))
+   (packages (map rpi3-package %base-packages))
    (essential-services
     (modify-services (operating-system-default-essential-services this-operating-system)
       (shepherd-root-service-type config =>
         (shepherd-configuration
          (inherit config)
-         (shepherd (package-with-cortex-a53-guile
+         (shepherd (rpi3-package
                     (shepherd-configuration-shepherd config)))))))
    (bootloader
     (bootloader-configuration
@@ -78,7 +102,7 @@
              (guix-service-type config =>
                (guix-configuration
                 (inherit config)
-                (guix (package-with-cortex-a53-guile
+                (guix (rpi3-package
                        (guix-configuration-guix config))))))))))
 
 (define initialize-rpi-boot-partition

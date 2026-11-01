@@ -2,14 +2,16 @@
 ;; (natively, through offloading, or with transparent binfmt/QEMU execution).
 ;; Run from the channel root: guix repl -L modules tests/runtime/mixed.scm
 (use-modules (gnu packages guile)
+             (gnu system images raspberrypi)
              (guix derivations)
              (guix gexp)
              (guix monads)
              (guix store)
-             (ice-9 textual-ports)
-             (spartan packages guile))
+             (ice-9 textual-ports))
 
-(define zlib (package-with-cortex-a53-guile guile-zlib))
+(define zlib (rpi3-package guile-zlib))
+(define guile-3.0/rpi3 (rpi3-package guile-3.0))
+(define guile-3.0-latest/rpi3 (rpi3-package guile-3.0-latest))
 
 (define zlib-check
   '(begin
@@ -31,13 +33,13 @@
                     (unless (zero? (system* guile "--no-auto-compile" "-c"
                                             "(display (version)) (newline)"))
                       (error "patched Guile could not execute" guile)))
-                  (list #$(file-append guile-3.0/cortex-a53 "/bin/guile")
-                        #$(file-append guile-3.0-latest/cortex-a53 "/bin/guile")))
+                  (list #$(file-append guile-3.0/rpi3 "/bin/guile")
+                        #$(file-append guile-3.0-latest/rpi3 "/bin/guile")))
                  (setenv "GUILE_LOAD_PATH" #$(file-append zlib "/share/guile/site/3.0"))
                  (setenv "GUILE_LOAD_COMPILED_PATH"
                          #$(file-append zlib "/lib/guile/3.0/site-ccache"))
                  (unless (zero?
-                          (system* #$(file-append guile-3.0/cortex-a53 "/bin/guile")
+                          (system* #$(file-append guile-3.0/rpi3 "/bin/guile")
                                    "--no-auto-compile" "-c"
                                    #$(object->string zlib-check)))
                    (error "native AArch64 consumer could not load with routed Guile"))

@@ -1,0 +1,4 @@
+#!/bin/sh
+# The upstream guile-snarf preprocessor selection, followed by a probe call.
+if [ x"$CPP" = x ] ; then cpp="aarch64-linux-gnu-gcc -E" ; else cpp="$CPP" ; fi
+exec ${cpp} "$@"

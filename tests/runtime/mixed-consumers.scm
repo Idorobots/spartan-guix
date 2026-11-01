@@ -1,16 +1,18 @@
 ;; Optional target-runtime smoke check after selectively cross-building.
 ;; Run from the channel root: guix repl -L modules tests/runtime/mixed-consumers.scm
 (use-modules ((gnu packages admin) #:select (shepherd-1.0))
+             (gnu packages guile)
              ((gnu packages ssh) #:select (guile-ssh))
+             (gnu system images raspberrypi)
              (guix derivations)
              (guix gexp)
              (guix monads)
              (guix store)
-             (ice-9 textual-ports)
-             (spartan packages guile))
+             (ice-9 textual-ports))
 
-(define shepherd (package-with-cortex-a53-guile shepherd-1.0))
-(define ssh (package-with-cortex-a53-guile guile-ssh))
+(define shepherd (rpi3-package shepherd-1.0))
+(define ssh (rpi3-package guile-ssh))
+(define guile (rpi3-package guile-3.0))
 
 (with-store store
   (let ((drv
@@ -33,7 +35,7 @@
                 ;; Creating a session exercises the C extension without needing
                 ;; a network service or the upstream server-startup harness.
                 (unless (zero?
-                         (system* #$(file-append guile-3.0/cortex-a53 "/bin/guile")
+                         (system* #$(file-append guile "/bin/guile")
                                   "--no-auto-compile" "-c"
                                   "(use-modules (ssh session))
                                    (unless (session? (make-session #:host \"127.0.0.1\"))
