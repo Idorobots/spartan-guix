@@ -43,7 +43,7 @@
            guile-with-native-config))
 
 (define %rpi3-package-replacements
-  `((,guile-avahi . ,guile-avahi/namespace-aware)))
+  `((,guile-avahi . ,guile-avahi/without-daemon-tests)))
 
 (define* (rpi3-package package #:key (system %system))
   "Apply the Pi 3's explicit fixes and mixed compilation policy to PACKAGE."

@@ -150,7 +150,7 @@ Recipe fixes are independent of the compilation platform:
 | =(spartan packages cortex-a53)= | =guile-with-cortex-a53-fix= | AArch64 erratum 843419 linker flag; JIT retained |
 | =(spartan packages guile-snarf)= | =guile-with-native-snarf= | Cross-built SDK's installed preprocessor fallback |
 | =(spartan packages guile-config)= | =guile-with-native-config= | Destination-native pkg-config in the installed SDK |
-| =(spartan packages avahi)= | =guile-avahi/namespace-aware= | Numeric foreign interface indices and serial publishing tests |
+| =(spartan packages avahi)= | =guile-avahi/without-daemon-tests= | Disable tests requiring an existing Avahi daemon; upstream source retained |
 
 The Guile transformations accept an upstream package and return a recipe, without
 wrapping Guile in the compilation adapter. They preserve its source, version,
@@ -158,8 +158,8 @@ outputs and metadata. Their argument changes remain deferred to the build contex
 
 =(spartan packages guile)= exports =make-guile-runtime-rewriter=. It accepts a
 =#:guile-transform= (default =identity=), optional =#:replacements= recipe pairs,
-and the compilation-platform =#:system= override. No hardware, SDK or Avahi fixes
-are selected by default. It adapts both upstream Guile releases and the selected
+and the compilation-platform =#:system= override. No hardware/SDK fixes or Avahi
+test policy are selected by default. It adapts both upstream Guile releases and the selected
 Guix, Shepherd, Guile-SSH and Guile-Readline consumers.
 
 The returned procedure rewrites explicit runtime and propagated dependencies,
@@ -189,7 +189,7 @@ For an SDK-only AArch64 setup, suitable for reuse by a future Pi 4 configuration
 (define runtime-package
   (make-guile-runtime-rewriter
    #:guile-transform sdk-fixes
-   #:replacements `((,guile-avahi . ,guile-avahi/namespace-aware))
+   #:replacements `((,guile-avahi . ,guile-avahi/without-daemon-tests))
    #:system "x86_64-linux"))
 
 (runtime-package guile-3.0)
@@ -198,7 +198,7 @@ For an SDK-only AArch64 setup, suitable for reuse by a future Pi 4 configuration
 
 Omit =#:system= to use the Guix runner's native platform. The Pi 3 image explicitly
 composes =guile-with-cortex-a53-fix= with the two SDK fixes and selects the Avahi
-variant in =(gnu system images raspberrypi)=. Its =rpi3-package= helper accepts a
+test-policy variant in =(gnu system images raspberrypi)=. Its =rpi3-package= helper accepts a
 package and an optional =#:system= override, and is used for the base profile,
 Guix service and Shepherd runtime. The previous Cortex-named runtime helper and
 precomposed Guile exports are replaced by these APIs.
@@ -302,29 +302,29 @@ guix build -L modules --system=aarch64-linux \
        (@ (gnu packages guile-xyz) guile-avahi))'
 #+end_src
 
-*** Guile-Avahi callbacks and publishing tests
+*** Guile-Avahi daemon-dependent tests
 
-Once binding generation worked, native Guile-Avahi exposed two independent
-failures when checking against the development container's host Avahi daemon.
-The daemon reported interface indices such as 605 and 602, while the container
-had only indices 1 and 2. Upstream's =scm_from_avahi_interface_index= tried to
-resolve every index with the client's =if_indextoname= and threw an error for
-interfaces outside its network namespace.
+All seven tests in upstream Guile-Avahi 0.4.1 assume an Avahi daemon is already
+reachable through system D-Bus. This includes =simple-poll.scm=,
+=threaded-poll.scm=, =guile-poll.scm= and =errors.scm= as well as =publish.scm=,
+=publish+browse.scm= and =publish+resolve.scm=. Neither the upstream suite nor
+the Guix recipe starts a private daemon. There are no standalone tests in this
+version's suite to retain.
 
-=(spartan packages avahi)= provides =guile-avahi/namespace-aware=. Its source
-patch preserves a numeric index when local interface-name lookup fails, using
-the existing numeric representation accepted by the reverse conversion. This
-also covers an interface disappearing between an event and its callback.
-The Pi 3 configuration selects this variant explicitly through the rewriter's
-=#:replacements=. Other configurations may opt in independently of the hardware
-and SDK fixes, while retaining their selected interpreter and library dependencies.
+=(spartan packages avahi)= provides =guile-avahi/without-daemon-tests=, setting
+=#:tests? #f= while retaining the exact upstream source. This avoids depending
+on host services during package builds. The previous runtime namespace patch
+and forced serial execution have been removed. They addressed failures caused
+by the container reaching a host daemon in another network namespace and by
+publishing tests sharing daemon state; neither is a board-specific requirement.
 
-The publishing tests also register =0.0.0.0= under different host names and
-compete for its reverse-PTR record when run concurrently against the same
-daemon. The variant sets =#:parallel-tests? #f= so all seven upstream tests run
-serially. The initial Scheme/FFI smoke check did not exercise these network
-callbacks; actual native extension and package builds are required to catch
-them.
+The Pi 3 configuration selects this test-policy variant explicitly through the
+rewriter's =#:replacements=. Other configurations may opt in independently of
+the hardware and SDK fixes. Dependencies still receive the selected Guile.
+This disables only Guile-Avahi's upstream integration suite; channel routing,
+SDK and image regression checks still run. Full Avahi integration testing needs
+a separately provisioned daemon. Live homelab discovery still requires Avahi
+and D-Bus as documented for the management tools.
 
 *** Earlier Shepherd and Guile-SSH builds
 
@@ -409,6 +409,11 @@ Graft analysis may still realize remaining prerequisites even for an image
 
 *** Modular-fix verification
 
+- After replacing the Avahi namespace workaround, regression checks confirm
+  upstream source identity, disabled daemon-dependent tests, default parallel
+  settings and the selected SDK-only Guile dependency. The full channel and
+  management suites and all three image dry runs still pass. The revised Avahi
+  package itself has not been rebuilt.
 - All 135 channel checks and 15 management-image checks pass. The ten SDK checks
   include executed preprocessor-selection fixtures, independent opt-in, and
   SDK-only native/cross compilation without the Cortex-A53 flag. The 25 mixed

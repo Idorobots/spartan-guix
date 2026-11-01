@@ -132,25 +132,27 @@
               (not (bag-target bag)))))
      (list guile-3.0 guile-3.0-latest))))
 
-(test-assert "unconfigured runtime rewriting enables no SDK or Avahi fixes"
+(test-assert "unconfigured runtime rewriting enables no SDK fixes or Avahi test policy"
   (parameterize ((%current-system "x86_64-linux")
                  (%current-target-system "aarch64-linux-gnu"))
     (and (equal? (package-arguments guile-3.0)
                  (package-arguments (plain-package guile-3.0)))
          (eq? (package-source guile-avahi)
-              (package-source (plain-package guile-avahi))))))
+              (package-source (plain-package guile-avahi)))
+         (apply (lambda* (#:key (tests? #t) #:allow-other-keys) tests?)
+                (package-arguments (plain-package guile-avahi))))))
 
-(test-assert "Avahi is independently selectable and still receives SDK-only Guile"
+(test-assert "Avahi skips daemon tests without patching its source and receives SDK-only Guile"
   (let* ((rewrite (make-guile-runtime-rewriter
                    #:guile-transform sdk-fixes
-                   #:replacements `((,guile-avahi . ,guile-avahi/namespace-aware))))
+                   #:replacements `((,guile-avahi . ,guile-avahi/without-daemon-tests))))
          (p (rewrite guile-avahi)))
     (parameterize ((%current-system "aarch64-linux") (%current-target-system #f))
-      (and (eq? (package-source guile-avahi/namespace-aware) (package-source p))
-           (every file-exists? (origin-patches (package-source p)))
+      (and (eq? (package-source guile-avahi) (package-source p))
+           (equal? (package-outputs guile-avahi) (package-outputs p))
            (eq? (rewrite guile-3.0) (lookup-package-input p "guile"))
            (apply (lambda* (#:key (parallel-tests? #t) (tests? #t) #:allow-other-keys)
-                    (and tests? (not parallel-tests?)))
+                    (and (not tests?) parallel-tests?))
                   (package-arguments p))))))
 
 (define runner (test-runner-current))
