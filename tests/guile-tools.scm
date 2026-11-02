@@ -18,6 +18,9 @@
 
 (test-begin "native-guile-tools")
 
+;; Exercise the cross SDK path regardless of current substitute availability.
+((@@ (spartan packages mixed) %native-outputs-available?) (const #f))
+
 (define %standard-phases build:%standard-phases)
 (define %snarf-fixture
   (string-append (dirname (current-filename)) "/runtime/guile-snarf.in"))

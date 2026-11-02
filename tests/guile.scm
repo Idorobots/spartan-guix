@@ -15,6 +15,9 @@
 
 (test-begin "guile-cortex-a53")
 
+;; Check the cross fallback independently of the current substituter cache.
+((@@ (spartan packages mixed) %native-outputs-available?) (const #f))
+
 (define (configure-flags package system target)
   (parameterize ((%current-system system)
                  (%current-target-system target))

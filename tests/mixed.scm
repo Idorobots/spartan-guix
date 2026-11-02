@@ -30,6 +30,19 @@
 
 (test-begin "mixed-compilation")
 
+;; Exercise the cross fallback deterministically; hits and mixed choices are
+;; covered separately without depending on a public substituter's cache state.
+((@@ (spartan packages mixed) %native-outputs-available?) (const #f))
+
+(define (same-build? package system target base base-system base-target)
+  (with-store store
+    (define (drv package system target)
+      (if target
+          (package-cross-derivation store package target system #:graft? #f)
+          (package-derivation store package system #:graft? #f)))
+    (string=? (derivation-file-name (drv package system target))
+              (derivation-file-name (drv base base-system base-target)))))
+
 (define guile-3.0/rpi3 (rpi3-package guile-3.0))
 (define guile-3.0-latest/rpi3 (rpi3-package guile-3.0-latest))
 (define sdk-fixes (compose guile-with-native-snarf guile-with-native-config))
@@ -47,19 +60,14 @@
                            "aarch64-linux" #f)))))
 
 (test-assert "one adapter routes native, cross and native requests without copies"
-  (and (eq? (package->bag routed "x86_64-linux" #f)
-            (package->bag hello "x86_64-linux" #f #:graft? #f))
-       (eq? (package->bag routed "aarch64-linux" #f)
-            (package->bag hello "x86_64-linux" "aarch64-linux-gnu"
-                          #:graft? #f))
-       (eq? (package->bag routed "x86_64-linux" #f)
-            (package->bag hello "x86_64-linux" #f #:graft? #f))))
+  (and (same-build? routed "x86_64-linux" #f hello "x86_64-linux" #f)
+       (same-build? routed "aarch64-linux" #f hello "x86_64-linux" "aarch64-linux-gnu")
+       (same-build? routed "x86_64-linux" #f hello "x86_64-linux" #f)))
 
 (test-assert "equivalent explicit target and compilation triplets select native lowering"
   (let ((p (package-with-compilation-system
             hello #:system "aarch64-unknown-linux-gnu")))
-    (and (eq? (package->bag p "x86_64-linux" "aarch64-linux-gnu")
-              (package->bag hello "aarch64-linux" #f #:graft? #f))
+    (and (same-build? p "x86_64-linux" "aarch64-linux-gnu" hello "aarch64-linux" #f)
          (not (bag-target (package->bag p "aarch64-linux" #f))))))
 
 (test-assert "runner-native tools never receive a cross target"
@@ -291,9 +299,10 @@
 
   (test-assert "package replacements are routed in the selected build context"
     (let ((p (package-with-compilation-system original-dependency #:system "x86_64-linux")))
-      (eq? (package->bag p "aarch64-linux" #f #:graft? #t)
-           (package->bag replacement-dependency "x86_64-linux"
-                         "aarch64-linux-gnu" #:graft? #f))))
+      (let ((bag (package->bag p "aarch64-linux" #f #:graft? #t)))
+        (and (string=? (package-full-name replacement-dependency "-") (bag-name bag))
+             (string=? "x86_64-linux" (bag-system bag))
+             (string=? "aarch64-linux-gnu" (bag-target bag))))))
 
   (test-assert "dependency graft origins and replacements retain cross architecture and outputs"
     (let* ((p (package-with-compilation-system graft-consumer #:system "x86_64-linux"))

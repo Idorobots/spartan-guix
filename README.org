@@ -112,24 +112,26 @@ selecting native-equivalent =/cross-fixed= aliases.
 (package-with-compilation-system linux-arm64-generic #:system "aarch64-linux")
 #+end_src
 
-The adapter's compilation platform is fixed when it is constructed. The required
-output platform is determined during lowering, from the requested system or
-target. Different platforms select cross-compilation; equal platforms select
-native compilation with target =#f=. Both Guix system names and GNU triplets are
+The adapter's fallback compilation platform is fixed when it is constructed. The
+required output platform is determined during lowering, from the requested system
+or target. Available native outputs skip the cross override; otherwise different
+platforms select cross-compilation. Equal platforms select native compilation
+with target =#f= without a substitute query. Guix system names and GNU triplets are
 normalized before comparison. For a system-only cross request, the target comes
 from Guix's platform registry: the generic triplet guess
 =aarch64-unknown-linux-gnu= is not a registered target in the pinned Guix, whereas
 =aarch64-linux-gnu= is.
 
 On an x86-64 runner, the kernel, both patched Guile versions, Guix, Shepherd,
-Guile-SSH and Guile-Readline cross-build for AArch64. Other affected consumers
+Guile-SSH and Guile-Readline cross-build for AArch64 when their native outputs
+are unavailable. Other affected consumers
 use native AArch64 derivations. When evaluated on an AArch64 runner, the same
 selected packages build natively.
 Daemon offloading executes these selected derivations; it does not revise the
 compilation policy according to which worker eventually runs a job.
 
-The adapter delegates to the original package's bag, re-evaluating its deferred
-fields in the selected compilation context. It creates no copy derivation and
+The adapter delegates package lowering, re-evaluating deferred fields in the
+selected compilation context. It creates no copy derivation and
 preserves every output, including Guile's =debug= output, search paths and kernel
 properties. Propagated dependencies exposed to profiles are also routed, so they
 match the actual cross-built dependencies instead of silently selecting native
@@ -140,6 +142,37 @@ graph; graft evaluation may realize packages even for an image =--derivation=.
 Apply recipe changes to the underlying package before wrapping it. The adapter
 delegates to that original recipe, rather than interpreting subsequent inherited
 argument or input overrides on the adapter as a new recipe.
+
+*** Automatic native-substitute selection
+
+=package-with-compilation-system= checks the exact native candidate before
+applying a cross-compilation override. Every declared output, including =debug=,
+must already be local or available from the daemon's configured substituters.
+Local and remote outputs can jointly satisfy one package. Recipes that disable
+substitution qualify only through local outputs. Required recipe fixes and
+runtime dependency replacements are applied before the check.
+
+The check runs lazily when resolving a package and is memoized per package and
+output platform in the running Guix process. Importing the module or constructing
+an adapter does not query substituters. Existing image/build commands and entry
+points use this behavior automatically. Query failures propagate; they are not
+silently treated as misses. Checking outputs lowers ungrafted derivations and
+downloads metadata only, starting no package builds. Normal image substitution
+and security graft processing still apply afterward.
+
+The adapter's propagated-input routing is used in both the build bag and profile
+metadata. Shared libraries therefore make the same native/cross choice even when
+Guile and Readline make different choices themselves. Other inputs retain their
+existing recipe behavior, including build-machine tools. Availability checks
+measure declared outputs rather than complete runtime-closure coverage. A native
+hit is used only if its original derivation still matches the routed propagated
+inputs; otherwise cross fallback avoids mismatched profile libraries.
+
+Guix does not expose the active command's store connection to package lowering.
+The availability check opens its own daemon connection, using its defaults; it
+does not inherit command-specific options such as =--no-substitutes= or
+=--substitute-urls=. In particular, those options can cause Guix to build a
+native candidate selected by the check instead of using the expected substitute.
 
 *** Independent recipe fixes and board policy
 
@@ -158,9 +191,10 @@ outputs and metadata. Their argument changes remain deferred to the build contex
 
 =(spartan packages guile)= exports =make-guile-runtime-rewriter=. It accepts a
 =#:guile-transform= (default =identity=), optional =#:replacements= recipe pairs,
-and the compilation-platform =#:system= override. No hardware/SDK fixes or Avahi
-test policy are selected by default. It adapts both upstream Guile releases and the selected
-Guix, Shepherd, Guile-SSH and Guile-Readline consumers.
+and the compilation-platform =#:system= override.
+No hardware/SDK fixes or Avahi test policy are selected by default. It adapts both
+upstream Guile releases and the selected Guix, Shepherd, Guile-SSH and
+Guile-Readline consumers.
 
 The returned procedure rewrites explicit runtime and propagated dependencies,
 preserving upstream objects for unaffected packages. Recipe replacements also
@@ -198,10 +232,10 @@ For an SDK-only AArch64 setup, suitable for reuse by a future Pi 4 configuration
 
 Omit =#:system= to use the Guix runner's native platform. The Pi 3 image explicitly
 composes =guile-with-cortex-a53-fix= with the two SDK fixes and selects the Avahi
-test-policy variant in =(gnu system images raspberrypi)=. Its =rpi3-package= helper accepts a
-package and an optional =#:system= override, and is used for the base profile,
-Guix service and Shepherd runtime. The previous Cortex-named runtime helper and
-precomposed Guile exports are replaced by these APIs.
+test-policy variant in =(gnu system images raspberrypi)=. Its =rpi3-package= helper
+accepts a package and an optional =#:system= override, and is
+used for the base profile, Guix service and Shepherd runtime. The previous
+Cortex-named runtime helper and precomposed Guile exports are replaced by these APIs.
 
 The Pi 3's hardware linker fix remains enabled for native AArch64 builds. SDK-only
 composition leaves it out in both native and cross modes. Putting a modified
@@ -234,14 +268,14 @@ Readline package. Rewriting only its direct Guile input mixed native and
 cross-built =libunistring= and =libgc=, producing profile collisions even when
 the library versions matched. Readline now uses the same
 selective compilation adapter as Guile, avoiding its slow emulated build on an
-x86 runner. The adapter routes Readline's original propagated library list to
-the same compilation platform as Guile, aligning =libunistring=, =libgc= and
-their dependencies in both build inputs and profile metadata. The original
+x86 runner. The adapter routes the shared propagated library list consistently
+in both build inputs and profile metadata. Native and cross consumers therefore
+share the same selected =libunistring= and =libgc= paths. The original
 source/version is retained. An AArch64 compilation platform still selects a
 native build, and the =#:system= override remains available.
 
-Regression checks cover Readline plus interactive Guile with either x86 or AArch64
-compilation selected, and for the combined barebones and management service
+Regression checks cover Readline plus interactive Guile with independent native
+and cross choices, and the combined barebones and management service
 profiles before and after image conversion. They use Guix's actual
 =check-for-collisions=, lowering ungrafted derivations without building profiles
 or realizing graft prerequisites. Production collision checks and grafting
@@ -407,7 +441,21 @@ guix build -L modules --system=aarch64-linux \
 Graft analysis may still realize remaining prerequisites even for an image
 =--derivation=. Full image resolution, assembly and hardware boot remain pending.
 
-*** Modular-fix verification
+*** Automatic native-substitute verification
+
+=tests/native-substitutes.scm= checks exact output queries, missing debug outputs,
+local/remote combinations, substitution-disabled recipes, lazy memoization,
+same-platform tools, and direct native/cross derivation identity. Mixed native
+and cross consumers share propagated library paths in both their derivations and
+actual Guix profile collision checks. Guile/Readline checks independently vary
+the compilation choices of both Guile versions and Readline.
+
+All 152 channel checks and 15 management-image checks pass. Barebones,
+named-discovery and management-image dry runs pass. A live availability check
+selected the native kernel; both Guile versions, Readline and Guix used their
+cross fallback. No package builds were started.
+
+*** Modular-fix verification before automatic substitute selection
 
 - After replacing the Avahi namespace workaround, regression checks confirm
   upstream source identity, disabled daemon-dependent tests, default parallel
