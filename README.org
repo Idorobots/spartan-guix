@@ -234,8 +234,7 @@ Omit =#:system= to use the Guix runner's native platform. The Pi 3 image explici
 composes =guile-with-cortex-a53-fix= with the two SDK fixes and selects the Avahi
 test-policy variant in =(gnu system images raspberrypi)=. Its =rpi3-package= helper
 accepts a package and an optional =#:system= override, and is
-used for the base profile, Guix service and Shepherd runtime. The previous
-Cortex-named runtime helper and precomposed Guile exports are replaced by these APIs.
+used for the base profile, Guix service and Shepherd runtime.
 
 The Pi 3's hardware linker fix remains enabled for native AArch64 builds. SDK-only
 composition leaves it out in both native and cross modes. Putting a modified
@@ -302,9 +301,8 @@ snarf script, so binding generation failed and left =src/*.c.x= missing.
 The independent =guile-with-native-snarf= transformation corrects the installed
 script after a cross-build. It preserves nonempty =CPP=, otherwise using the
 consumer's =CC= or =gcc= with =-E=. Empty =CPP= and =CC= receive the fallback.
-The runtime rewriter no longer inserts preprocessor phases into consumers, so
-the SDK also works for callers outside that rewriter. Native Guile recipes retain
-their upstream tool defaults.
+The corrected SDK works independently of the runtime rewriter. Native Guile
+recipes retain their upstream tool defaults.
 
 The installed =guile-config= had another configure-time tool reference: Guix
 embedded its build-machine =aarch64-linux-gnu-pkg-config= wrapper, pointing at an
@@ -316,8 +314,7 @@ Guile's own =PKG_CONFIG_PATH= and library/header references. This deliberately
 uses the primitive =%pkg-config= package: =pkg-config= is identifier syntax that
 would select the cross wrapper again in the outer cross-build context.
 
-The SDK correction changes both cross-built Guile outputs and their consumers'
-derivations. Rebuild the working-tree definitions using =-L modules= (or
+Build the working-tree definitions using =-L modules= (or
 =-L spartan-guix/modules= from the homelab root).
 
 =tests/guile-tools.scm= checks preprocessor defaults, compiler/preprocessor
@@ -347,10 +344,7 @@ version's suite to retain.
 
 =(spartan packages avahi)= provides =guile-avahi/without-daemon-tests=, setting
 =#:tests? #f= while retaining the exact upstream source. This avoids depending
-on host services during package builds. The previous runtime namespace patch
-and forced serial execution have been removed. They addressed failures caused
-by the container reaching a host daemon in another network namespace and by
-publishing tests sharing daemon state; neither is a board-specific requirement.
+on host services during package builds.
 
 The Pi 3 configuration selects this test-policy variant explicitly through the
 rewriter's =#:replacements=. Other configurations may opt in independently of
@@ -360,32 +354,9 @@ SDK and image regression checks still run. Full Avahi integration testing needs
 a separately provisioned daemon. Live homelab discovery still requires Avahi
 and D-Bus as documented for the management tools.
 
-*** Earlier Shepherd and Guile-SSH builds
+*** Selectively compiling Shepherd and Guile-SSH
 
-The following diagnoses and successful builds predate the modular SDK refactor.
-Their store paths are historical; the current composed recipes need rebuilding.
-
-The next image prerequisite, Guile-SSH 1.0.0, compiled successfully but failed
-the client/server, pipe, shell, tunnel and distributed-execution tests. The six
-=dist.scm= failures were consequences of the same test-server readiness timeout.
-The per-test =*-libssh.log= files showed all 100 readiness polls expiring, then
-the parent killing the still-starting child. Some children reached their server
-log initialization just before being killed; there was no SSH protocol error.
-
-Upstream's decreasing =tries= counter sleeps for =1000000 / tries= microseconds
-per poll, totaling only about 5.2 seconds. Fresh Guile processes loading the SSH
-modules under AArch64 user-mode emulation and concurrent build load exceeded
-that limit. A temporary startup-timeout patch allowed all 12 native test suites
-to pass, but that patch and its package variant have been removed.
-
-Shepherd 1.0.9 also compiled but its =tests/basic.sh= hit the upstream three-minute
-shell-test deadline (exit 124); 85 checks passed and one ENOSPC check skipped.
-That skip reflects unavailable =unshare= support and is separate from the failure.
-These are newly exercised native/emulated test paths: whole-graph cross-builds
-skip target runtime tests, and rewritten Guile consumers cannot reuse upstream
-substitutes.
-
-The selected policy now routes upstream =guile-ssh= and Shepherd 0.10/1.0 through
+The runtime rewriter routes upstream =guile-ssh= and Shepherd 0.10/1.0 through
 =package-with-compilation-system= after rewriting their runtime dependencies.
 They cross-build on an x86-64 runner and build natively on an AArch64 runner,
 with the same explicit =#:system= override as Guile. Their original sources and
@@ -404,33 +375,25 @@ guix build -L modules --system=aarch64-linux --keep-failed \
 guix repl -L modules tests/runtime/mixed-consumers.scm
 #+end_src
 
-Both selected cross-builds completed successfully:
-
-- Shepherd: =/gnu/store/dlxx2k2fxxz19ymxh96dnw5pixm9ma37-shepherd-1.0.9=.
-- Guile-SSH: =/gnu/store/xb9czlz6fiwd1f5xk2sacmhkm2hrwfqj-guile-ssh-1.0.0=,
-  with =/gnu/store/vrrms5a0aaawy9wwkmjm84lqmfm8ffbx-guile-ssh-1.0.0-debug=.
-
-The installed Shepherd scripts reference patched AArch64 Guile and the cross-built
-target Fibers. Guile-SSH's ELF RUNPATH likewise selects patched =libguile=.
-=tests/runtime/mixed-consumers.scm= passed through the daemon in a native AArch64
-derivation: =shepherd --version= and =herd --version= load the runtime modules,
-and patched Guile loads the SSH C extension and creates a session. This smoke
-check is separate from full native runtime-suite coverage.
+The Shepherd scripts reference the selected AArch64 Guile and target Fibers.
+Guile-SSH's ELF RUNPATH selects the corresponding =libguile=.
+=tests/runtime/mixed-consumers.scm= exercises these consumers through the daemon
+in a native AArch64 derivation: =shepherd --version= and =herd --version= load the
+runtime modules, and Guile loads the SSH C extension and creates a session.
+This smoke check is separate from full native runtime-suite coverage.
 
 *** Selectively compiling Guix
 
 Guix is also selected by the runtime rewriter for compilation through
-the adapter, with the same runner-native default and =#:system= override. This
-replaces its earlier native AArch64/emulated build on an x86 runner. Its recipe
-and source remain upstream; runtime dependency rewriting precedes adaptation.
+the adapter, with the same runner-native default and =#:system= override. Its
+recipe and source remain upstream; runtime dependency rewriting precedes adaptation.
 Guix uses the upstream latest Guile release, so its build-machine Guile and
 patched target Guile are checked against that release rather than the service
 interpreter's older Guile version. Native build-time extensions remain upstream;
 propagated runtime extensions, including Guile-SSH, follow the target route.
 
 The package dry run and derivation checks pass. A complete Guix cross-build and
-runtime check have not been run. The earlier image/build jobs were stopped;
-verification of this policy change did not restart them. To build Guix explicitly:
+runtime check have not been run. To build Guix explicitly:
 
 #+begin_src sh
 guix build -L modules --system=aarch64-linux \
@@ -455,90 +418,13 @@ named-discovery and management-image dry runs pass. A live availability check
 selected the native kernel; both Guile versions, Readline and Guix used their
 cross fallback. No package builds were started.
 
-*** Modular-fix verification before automatic substitute selection
+*** Runtime validation
 
-- After replacing the Avahi namespace workaround, regression checks confirm
-  upstream source identity, disabled daemon-dependent tests, default parallel
-  settings and the selected SDK-only Guile dependency. The full channel and
-  management suites and all three image dry runs still pass. The revised Avahi
-  package itself has not been rebuilt.
-- All 135 channel checks and 15 management-image checks pass. The ten SDK checks
-  include executed preprocessor-selection fixtures, independent opt-in, and
-  SDK-only native/cross compilation without the Cortex-A53 flag. The 25 mixed
-  checks include profile collision checks for both SDK-only and Pi 3 policies.
-- Barebones, named-discovery and management-image dry runs pass. A standalone
-  SDK-only Guile-Readline dry run also passes.
-- No package compilation was started for this refactor. The installed-snarf
-  correction changes Guile and consumer derivations. Rebuilding and rerunning
-  =tests/runtime/guile-sdk.scm= for both compositions is still required for full
-  SDK integration validation. Full image assembly and hardware boot remain pending.
-
-*** Verification before the modular SDK refactor (historical)
-
-These build results predate the installed =guile-snarf= correction and refer to
-older derivations. They do not verify a rebuild of the current composed recipes.
-
-- All 131 channel regression checks and all 15 homelab management-image checks
-  passed. The seven =native-guile-tools= checks cover the SDK input architecture,
-  preprocessor selection and the selected Guile-Avahi recipe. The 24 mixed
-  compilation checks also cover selective consumer routing, build/runtime Guile
-  separation, source/output preservation, target/native Fibers and Guix's SSH
-  separation. The service graph also checks selective Guix compilation before
-  and after image conversion, and combined profile collision checks cover
-  Guile-Readline's propagated libraries.
-- Both corrected cross-built Guile versions were rebuilt successfully. Their
-  =guile-config= programs now reference the AArch64 executable
-  =/gnu/store/hiw56sm54ffagwkcaq4q4g9qlk1hg7x2-pkg-config-0.29.2/bin/pkg-config=.
-- The native C-extension SDK check passed with Guile 3.0.9 and 3.0.11, including
-  binding generation, compile/link flag discovery, native compilation, extension
-  loading and a call into the C code. ELF RUNPATHs reference the corresponding
-  patched =libguile= outputs, not upstream native Guile.
-- Guile-Avahi built successfully with all seven upstream tests passing at
-  =/gnu/store/vnavyb5wnrbjpc28gcna9q88c2dyin5k-guile-avahi-0.4.1=.
-- Shepherd and Guile-SSH cross-built successfully and passed the daemon-executed
-  AArch64 smoke check above. The earlier SSH timeout patch is removed.
-- Image, management-image and named-discovery dry runs passed with the profile
-  propagation fix. The Guix package dry run passed; the full cross-build is
-  unverified and all previously started build jobs are stopped.
-
-The historical Guile outputs were
-=/gnu/store/q50jvm5359hsg9fy31xv16g0nfl5m7nq-guile-3.0.9= and
-=/gnu/store/a7ncnzkx4nhbkslx5cq736ybvwq3lww4-guile-3.0.11=, with their respective
-debug outputs retained. Current working-tree recipes have new derivations.
-
-*** Initial mixed-compilation verification
-
-With Guix =2bc642182e5e7914c1ea4deb696b8e3566b12b3f= and the homelab's pinned
-Nonguix, using working-tree modules:
-
-- All 114 channel checks passed, including 15 mixed-compilation checks. The
-  homelab management-image suite passed all 14 checks.
-- Both barebones and management image dry runs passed, as did named image
-  discovery. They stop at the next graft-analysis prerequisite group: 18 custom
-  native AArch64 derivations for Guix, Shepherd and their extensions remained
-  after the Guile-Zlib check. This is not the full eventual image build count.
-- The selected kernel and both Guile versions, including debug outputs, were
-  successfully realized by reusing existing cross-built store outputs. Their
-  ungrafted derivations match direct cross-builds exactly; same-platform tests
-  also match direct native builds.
-- The daemon integration check executed AArch64 Guile 3.0.9 and 3.0.11 and
-  successfully exercised a newly native-built Guile-Zlib consumer's compression
-  FFI. Its configure log selects the routed patched Guile for the interpreter,
-  guild and pkg-config; all 141 upstream Guile-Zlib tests passed.
-- =guix weather= found all nine declared outputs of upstream NTP, ALSA utilities,
-  minimal Groff, BIND, htop, lm-sensors and OpenSSH on Bordeaux for AArch64.
-  This measures package outputs before grafting, not complete closure coverage.
-  Guix's normal security grafts remain enabled.
-- Upstream native AArch64 NTP, including its security grafts, was realized at
-  =/gnu/store/782hwxq205laym31j3knxxrki9221gq0-ntp-4.2.8p18=. The HTTPS runtime
-  script passed with it: runtime modules load, certificate-verified downloads
-  succeed, and untrusted certificates are rejected.
-
-Complete image derivation resolution was not finished: graft analysis triggered
-native Guile-consumer builds and the integration command exceeded its time
-limit. Full SD image assembly and Pi hardware boot remain unverified. Run
-=make check-image-derivation= for the full-lowering integration check, then the
-image build and hardware acceptance procedure.
+Full SDK integration validation requires running =tests/runtime/guile-sdk.scm=
+for both SDK-only and Pi 3 compositions. The Guile-Avahi package build, Guix
+cross-build, full image assembly and hardware boot also remain pending.
+Run =make check-image-derivation= for the full-lowering integration check, then
+the image build and hardware acceptance procedure.
 
 ** Explicit whole-graph cross-compilation fixes and workarounds
 
@@ -596,8 +482,7 @@ fix applies to native AArch64 builds as well as cross-builds targeting AArch64.
             (ntp-configuration (ntp ntp/cross-fixed)))
    #+end_src
 
-   Hosts inheriting =rpi3-barebones-os= inherit this service directly; they do
-   not need to replace OpenNTPD or add another NTP service. The initial correction
+   Hosts inheriting =rpi3-barebones-os= inherit this service directly. The initial correction
    permits a large clock error at startup, not unrestricted large adjustments
    throughout the daemon's lifetime.
 
