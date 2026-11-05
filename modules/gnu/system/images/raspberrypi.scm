@@ -139,9 +139,7 @@
 
 (define rpi3-barebones-raw-image
   (image
-   (inherit
-    (os+platform->image rpi3-barebones-os aarch64-linux
-                        #:type rpi-image-type))
+   (inherit (os->image rpi3-barebones-os #:type rpi-image-type))
    (name 'rpi3-barebones-raw-image)))
 
 rpi3-barebones-raw-image
