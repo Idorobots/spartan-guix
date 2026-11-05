@@ -466,8 +466,9 @@ systems. =tests/cross.scm= additionally checks native target/propagated package
 input objects for all =/cross-fixed= variants, switching native/cross/native on
 one memoized graph, propagated inputs, output selectors, native tools and graft
 replacements.
-The =/cortex-a53= Guile variants serve a different purpose: their hardware erratum
-fix applies to native AArch64 builds as well as cross-builds targeting AArch64.
+The =guile-with-cortex-a53-fix= transformation serves a different purpose: its
+hardware erratum fix applies to native AArch64 builds as well as cross-builds
+targeting AArch64.
 
 *** Modules
 
@@ -736,11 +737,10 @@ guix build -L modules --target=aarch64-linux-gnu --no-grafts \
   -e '(@ (spartan packages admin) htop/cross-fixed)'
 #+end_src
 
-Earlier whole-graph cross evaluation with these fixes selected successfully
-lowered the homelab's Pi management image and reported pending builds and
-downloads. The active native-first configuration instead uses the mixed policy
-above. A completed dry run does not establish that every remaining package
-builds or that the resulting image boots on hardware.
+Whole-graph cross-compilation requires explicitly selecting these variants.
+The Pi configuration uses the mixed policy above. A completed dry run does not
+establish that every remaining package builds or that the resulting image boots
+on hardware.
 
 *** Related image and runtime corrections
 
