@@ -55,9 +55,10 @@ included in =rpi3-barebones-os=:
   =brcmfmac43430-sdio.raspberrypi,3-model-b.txt= and
   =brcmfmac43430-sdio.clm_blob= from Nonguix's =linux-firmware=. Generic kernels
   without firmware compression support cannot load its Zstd-compressed files.
-- =rpi3-bluetooth-firmware= installs =BCM43430A1.hcd= from Raspberry Pi OS's
-  commit-pinned, hash-verified =bluez-firmware= source, with its Cypress license
-  and the =BCM43430A1.raspberrypi,3-model-b.hcd= alias.
+- =rpi3-bluetooth-firmware= extracts =BCM43430A1.hcd= and its Cypress license
+  from Debian Trixie's =bluez-firmware_1.2-13_all.deb= in the Debian archive.
+  The package is version-pinned and SHA256-verified; the firmware also gets the
+  =BCM43430A1.raspberrypi,3-model-b.hcd= alias.
 
 Both install uncompressed files under =lib/firmware/brcm/=. The OS also retains
 =linux-firmware= and =%base-firmware=, including =wireless-regdb= for kernels
