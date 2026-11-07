@@ -1,8 +1,9 @@
 (use-modules (gnu)
              (gnu bootloader u-boot)
              (gnu image)
-             (gnu packages raspberry-pi)
+             (gnu packages linux)
              (gnu packages ntp)
+             (gnu packages raspberry-pi)
              (gnu services networking)
              (gnu services ssh)
              (gnu system image)
@@ -11,7 +12,10 @@
              (guix gexp)
              (guix packages)
              (ice-9 textual-ports)
+             ((nongnu packages linux) #:select (linux-arm64-generic linux-firmware))
              (spartan bootloader raspberrypi)
+             (spartan packages firmware)
+             (spartan packages mixed)
              (spartan services file-systems)
              (srfi srfi-1)
              (srfi srfi-64))
@@ -169,6 +173,20 @@
 
 (test-equal "Wi-Fi-capable kernel is selected" "linux-arm64-generic"
   (package-name (operating-system-kernel rpi3-barebones-os)))
+
+(test-assert "firmware fixes retain the generic kernel before and after image conversion"
+  (every (lambda (system)
+           (eq? (operating-system-kernel system)
+                (package-with-compilation-system linux-arm64-generic)))
+         (list rpi3-barebones-os converted)))
+
+(test-assert "radio firmware and signed regulatory database survive image conversion"
+  (every (lambda (system)
+           (let ((firmware (operating-system-firmware system)))
+             (every (lambda (package) (memq package firmware))
+                    (cons* rpi3-wifi-firmware rpi3-bluetooth-firmware
+                           linux-firmware wireless-regdb %base-firmware))))
+         (list rpi3-barebones-os converted)))
 
 (test-assert "barebones image needs no management keys or Wi-Fi credentials"
   (and (not (service-of-type rpi3-barebones-os openssh-service-type))

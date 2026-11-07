@@ -16,6 +16,7 @@
   #:use-module (spartan bootloader raspberrypi)
   #:use-module (spartan packages avahi)
   #:use-module (spartan packages cortex-a53)
+  #:use-module (spartan packages firmware)
   #:use-module (spartan packages guile)
   #:use-module (spartan packages guile-config)
   #:use-module (spartan packages guile-snarf)
@@ -77,7 +78,10 @@
    (timezone "Etc/UTC")
    (locale "en_US.utf8")
    (kernel (package-with-compilation-system linux-arm64-generic))
-   (firmware (list linux-firmware))
+   (firmware (cons* rpi3-wifi-firmware
+                    rpi3-bluetooth-firmware
+                    linux-firmware
+                    %base-firmware))
    (initrd-modules '())
    (packages (map rpi3-package %base-packages))
    (essential-services

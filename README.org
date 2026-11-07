@@ -46,6 +46,39 @@ guix system image -L modules --system=aarch64-linux --root=pi3-barebones-image \
   modules/gnu/system/images/raspberrypi.scm
 #+end_src
 
+*** Pi 3 radio firmware
+
+=(spartan packages firmware)= provides two small compatibility packages, both
+included in =rpi3-barebones-os=:
+
+- =rpi3-wifi-firmware= decompresses =brcmfmac43430-sdio.bin=,
+  =brcmfmac43430-sdio.raspberrypi,3-model-b.txt= and
+  =brcmfmac43430-sdio.clm_blob= from Nonguix's =linux-firmware=. Generic kernels
+  without firmware compression support cannot load its Zstd-compressed files.
+- =rpi3-bluetooth-firmware= installs =BCM43430A1.hcd= from Raspberry Pi OS's
+  commit-pinned, hash-verified =bluez-firmware= source, with its Cypress license
+  and the =BCM43430A1.raspberrypi,3-model-b.hcd= alias.
+
+Both install uncompressed files under =lib/firmware/brcm/=. The OS also retains
+=linux-firmware= and =%base-firmware=, including =wireless-regdb= for kernels
+requiring a signed regulatory database. These packages only decompress or copy
+files; the generic kernel recipe and boot/GPU firmware remain unchanged.
+
+Build the packages independently from this channel's root:
+
+#+begin_src sh
+guix build -L modules rpi3-wifi-firmware rpi3-bluetooth-firmware
+#+end_src
+
+After booting the resulting image, check =dmesg= for successful =brcmfmac= and
+Bluetooth firmware loading and the absence of missing-firmware or regulatory
+database errors. =ip link show wlan0= should find the Wi-Fi interface; with
+wireless tools installed, =iw dev wlan0 scan= should find nearby networks.
+On a host with Bluetooth controller initialization and BlueZ configured,
+=bluetoothctl list= should show the controller and =bluetoothctl scan on=
+should discover nearby devices. Credentials, radio userspace services and
+hardware acceptance checks belong to the consuming host configuration.
+
 ** Filesystem resizing
 
 =(spartan services file-systems)= provides =resize-file-system-service-type=
