@@ -174,10 +174,14 @@
 (test-equal "Wi-Fi-capable kernel is selected" "linux-arm64-generic"
   (package-name (operating-system-kernel rpi3-barebones-os)))
 
-(test-assert "firmware fixes retain the generic kernel before and after image conversion"
+(test-assert "radio workaround retains the generic kernel and boot arguments after image conversion"
   (every (lambda (system)
-           (eq? (operating-system-kernel system)
-                (package-with-compilation-system linux-arm64-generic)))
+           (let ((arguments (operating-system-user-kernel-arguments system)))
+             (and (eq? (operating-system-kernel system)
+                       (package-with-compilation-system linux-arm64-generic))
+                  (member "brcmfmac.feature_disable=0x2000" arguments)
+                  (every (lambda (argument) (member argument arguments))
+                         %default-kernel-arguments))))
          (list rpi3-barebones-os converted)))
 
 (test-assert "radio firmware and signed regulatory database survive image conversion"

@@ -78,6 +78,10 @@
    (timezone "Etc/UTC")
    (locale "en_US.utf8")
    (kernel (package-with-compilation-system linux-arm64-generic))
+   ;; Firmware-side WPA handshakes time out on the Pi 3. Let wpa_supplicant
+   ;; handle them instead; bit 13 disables brcmfmac's FWSUP feature.
+   (kernel-arguments (cons "brcmfmac.feature_disable=0x2000"
+                           %default-kernel-arguments))
    ;; On a native-output miss, install the blobs with runner-native tools.
    (firmware (cons* (package-with-compilation-system linux-firmware-uncompressed)
                     rpi3-bluetooth-firmware
