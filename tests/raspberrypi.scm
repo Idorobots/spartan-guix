@@ -183,9 +183,10 @@
 (test-assert "radio firmware and signed regulatory database survive image conversion"
   (every (lambda (system)
            (let ((firmware (operating-system-firmware system)))
-             (every (lambda (package) (memq package firmware))
-                    (cons* rpi3-wifi-firmware rpi3-bluetooth-firmware
-                           linux-firmware wireless-regdb %base-firmware))))
+             (and (not (memq linux-firmware firmware))
+                  (every (lambda (package) (memq package firmware))
+                         (cons* linux-firmware-uncompressed rpi3-bluetooth-firmware
+                                wireless-regdb %base-firmware)))))
          (list rpi3-barebones-os converted)))
 
 (test-assert "barebones image needs no management keys or Wi-Fi credentials"

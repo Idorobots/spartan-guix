@@ -78,9 +78,8 @@
    (timezone "Etc/UTC")
    (locale "en_US.utf8")
    (kernel (package-with-compilation-system linux-arm64-generic))
-   (firmware (cons* rpi3-wifi-firmware
+   (firmware (cons* linux-firmware-uncompressed
                     rpi3-bluetooth-firmware
-                    linux-firmware
                     %base-firmware))
    (initrd-modules '())
    (packages (map rpi3-package %base-packages))
