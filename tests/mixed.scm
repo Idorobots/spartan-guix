@@ -21,6 +21,7 @@
              (guix store)
              (guix utils)
              (nongnu packages linux)
+             (spartan packages firmware)
              (spartan packages guile)
              (spartan packages guile-config)
              (spartan packages guile-snarf)
@@ -248,7 +249,7 @@
      (list rpi3-barebones-os
            (operating-system-for-image (os->image rpi3-barebones-os #:type rpi-image-type)))))
 
-  (test-assert "routed Guile and kernel derivations equal the runner's direct builds"
+  (test-assert "routed Guile, kernel and firmware derivations equal the runner's direct builds"
     (every
      (lambda (pair)
        (same-derivation?
@@ -257,7 +258,9 @@
      (list (cons (rpi3-guile-fixes guile-3.0) guile-3.0/rpi3)
            (cons (rpi3-guile-fixes guile-3.0-latest) guile-3.0-latest/rpi3)
            (cons linux-arm64-generic
-                 (operating-system-kernel rpi3-barebones-os)))))
+                 (operating-system-kernel rpi3-barebones-os))
+           (cons linux-firmware-uncompressed
+                 (car (operating-system-firmware rpi3-barebones-os))))))
 
   (test-assert "same-platform Guile adapter has the exact native derivation"
     (let* ((base (rpi3-guile-fixes guile-3.0))

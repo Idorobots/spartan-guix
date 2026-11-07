@@ -78,7 +78,8 @@
    (timezone "Etc/UTC")
    (locale "en_US.utf8")
    (kernel (package-with-compilation-system linux-arm64-generic))
-   (firmware (cons* linux-firmware-uncompressed
+   ;; On a native-output miss, install the blobs with runner-native tools.
+   (firmware (cons* (package-with-compilation-system linux-firmware-uncompressed)
                     rpi3-bluetooth-firmware
                     %base-firmware))
    (initrd-modules '())

@@ -185,7 +185,8 @@
            (let ((firmware (operating-system-firmware system)))
              (and (not (memq linux-firmware firmware))
                   (every (lambda (package) (memq package firmware))
-                         (cons* linux-firmware-uncompressed rpi3-bluetooth-firmware
+                         (cons* (package-with-compilation-system linux-firmware-uncompressed)
+                                rpi3-bluetooth-firmware
                                 wireless-regdb %base-firmware)))))
          (list rpi3-barebones-os converted)))
 
