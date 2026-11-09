@@ -33,7 +33,7 @@ Add a service to the consuming operating system's =services=:
                       (driver "usbhid-ups")
                       (port "auto")
                       (extra-config "vendorid = 051d\nserial = YOUR-SERIAL\n"))))
-          ;; Optional absolute path supplied by the host's secret provisioning.
+          ;; Optional file managed by the consumer and readable by nut.
           (users-file "/run/secrets/upsd.users")))
 #+end_src
 
@@ -53,13 +53,50 @@ devices require host-provided device permissions granting =nut= access.
 =upsd-configuration-extra-config= supplies the entire =upsd.conf=, defaulting
 to =LISTEN 127.0.0.1 3493=. Set explicit =LISTEN= lines for LAN clients.
 =package= can override the default =nut= package. Public configuration is stored
-in the Guix store: keep passwords out of =extra-config=. When =users-file= is
-set, provision it before system activation, including at boot. Activation copies
-it to root-owned =/run/nut-config/upsd.users= with mode 0640 and group =nut=;
-the original can remain root-readable only. Without it, an empty users file
-allows status queries but no authenticated administration. Re-activate and
-restart =upsd= after credential changes. This service serves UPS data; automatic
-host shutdown requires a separately configured =upsmon= deployment.
+in the Guix store: keep passwords out of =extra-config=. =users-file= accepts an
+absolute path to a consumer-managed file. The service links =/etc/nut/upsd.users=
+directly to that path; it does not read its contents during the build or copy,
+decrypt, or change the permissions of the supplied file during activation.
+The file need not exist on the build machine. The consumer must make it readable
+by =nut=, with traversable parent directories, before =upsd= starts.
+
+Without =users-file=, the service installs an empty users file from the store,
+with no runtime provisioning needed. This allows status queries but no
+authenticated administration or =upsmon= login. Reload or restart =upsd= after
+changing the users file. Automatic host shutdown requires a separately configured
+=upsmon= deployment.
+
+=shepherd-requirement= defaults to ='()= and adds dependencies to =upsd= alongside
+networking and its drivers. For a file decrypted by the consumer's SOPS service,
+configure the secret's permissions, register it with that service, and make
+=upsd= wait for =sops-secrets=. For example, in the consuming host configuration:
+
+#+begin_src scheme
+(use-modules (guix gexp) (sops secrets) (sops services sops))
+
+(define upsd-users
+  (sops-secret
+   (key '("upsd_users"))
+   (file (local-file "secrets.yaml"))
+   (group "nut")
+   (permissions #o640)))
+
+;; Add these service expressions to the host's services, or include upsd-users
+;; in the secrets list of its existing sops-secrets service.
+(service sops-secrets-service-type
+         (sops-service-configuration
+          (age-key-file "/etc/sops/age/keys.txt")
+          (secrets (list upsd-users))))
+
+(service upsd-service-type
+         (upsd-configuration
+          (users-file (sops-secret->secret-file upsd-users))
+          (shepherd-requirement '(sops-secrets))
+          (ups (list (nut-ups
+                      (name "office")
+                      (driver "usbhid-ups")
+                      (port "auto"))))))
+#+end_src
 
 #+begin_src sh
 guix build -L modules nut
@@ -69,6 +106,8 @@ herd status upsd
 upsc office@localhost
 #+end_src
 
+The Scheme tests build both default and runtime-credentials configuration
+directories through Guix's outer =/etc= union, without building a system image.
 The optional runtime smoke test uses =dummy-ups= and a loopback port and needs
 no UPS hardware. Replug an already connected USB UPS after deploying its udev
 rules if it retains its old permissions.

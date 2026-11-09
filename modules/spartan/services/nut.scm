@@ -11,7 +11,8 @@
             nut-ups-extra-config
             upsd-configuration upsd-configuration? upsd-configuration-package
             upsd-configuration-ups upsd-configuration-extra-config
-            upsd-configuration-users-file upsd-service-type))
+            upsd-configuration-users-file
+            upsd-configuration-shepherd-requirement upsd-service-type))
 
 (define-record-type* <nut-ups> nut-ups make-nut-ups nut-ups?
   (name nut-ups-name)
@@ -25,8 +26,9 @@
   (ups upsd-configuration-ups (default '()))
   (extra-config upsd-configuration-extra-config
                 (default "LISTEN 127.0.0.1 3493\n"))
-  ;; Absolute path provisioned before activation, outside the store.
-  (users-file upsd-configuration-users-file (default #f)))
+  ;; The consumer supplies this file and makes it readable by nut at runtime.
+  (users-file upsd-configuration-users-file (default #f))
+  (shepherd-requirement upsd-configuration-shepherd-requirement (default '())))
 
 (define (validated-ups config)
   (let ((devices (upsd-configuration-ups config)))
@@ -61,35 +63,27 @@
                      (validated-ups config))))))
 
 (define (upsd-etc config)
-  `(("nut/ups.conf" ,(ups-file config))
-    ("nut/upsd.conf" ,(plain-file "upsd.conf"
-                                (upsd-configuration-extra-config config)))
-    ("nut/upsd.users" "/run/nut-config/upsd.users")))
-
-(define (upsd-activation config)
+  ;; The outer /etc union checks that each source exists at build time.  Put
+  ;; the optional runtime link inside a directory that is built in the store,
+  ;; permitting that link to remain dangling until the consumer creates it.
   (let ((users (upsd-configuration-users-file config)))
     (when (and users (not (and (string? users) (string-prefix? "/" users))))
-      (error "upsd users-file must be an absolute runtime path" users))
-    #~(begin
-        (use-modules (guix build utils))
-        (let ((account (getpwnam "nut")))
-          (mkdir-p "/run/nut")
-          (chown "/run/nut" (passwd:uid account) (passwd:gid account))
-          (chmod "/run/nut" #o750)
-          (mkdir-p "/run/nut-config")
-          (chown "/run/nut-config" 0 (passwd:gid account))
-          (chmod "/run/nut-config" #o750)
-          ;; Copy credentials without exposing an intermediate world-readable file.
-          (let ((temporary "/run/nut-config/upsd.users.new"))
-            (when (file-exists? temporary) (delete-file temporary))
-            (let ((port (open temporary (logior O_WRONLY O_CREAT O_EXCL) #o600)))
-              (close-port port))
-            (if #$users
-                (copy-file #$users temporary)
-                (call-with-output-file temporary (lambda (port) (display "" port))))
-            (chown temporary 0 (passwd:gid account))
-            (chmod temporary #o640)
-            (rename-file temporary "/run/nut-config/upsd.users"))))))
+      (error "upsd users-file must be an absolute file path" users))
+    `(("nut" ,(file-union
+               "nut-config"
+               `(("ups.conf" ,(ups-file config))
+                 ("upsd.conf" ,(plain-file "upsd.conf"
+                                          (upsd-configuration-extra-config config)))
+                 ("upsd.users" ,(or users (plain-file "upsd.users" ""))))
+               #:dangling-symlinks? (and users #t))))))
+
+(define (upsd-activation _)
+  #~(begin
+      (use-modules (guix build utils))
+      (let ((account (getpwnam "nut")))
+        (mkdir-p "/run/nut")
+        (chown "/run/nut" (passwd:uid account) (passwd:gid account))
+        (chmod "/run/nut" #o750))))
 
 (define (upsd-shepherd-services config)
   (let* ((package (upsd-configuration-package config))
@@ -100,7 +94,9 @@
      (shepherd-service
       (documentation "Serve UPS status over the NUT protocol.")
       (provision '(upsd))
-      (requirement (cons 'networking (map driver-provision devices)))
+      (requirement (append '(networking)
+                           (map driver-provision devices)
+                           (upsd-configuration-shepherd-requirement config)))
       (start #~(make-forkexec-constructor
                 (list #$(file-append package "/sbin/upsd") "-F")
                 #:user "nut" #:group "nut"
