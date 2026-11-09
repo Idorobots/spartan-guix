@@ -13,6 +13,66 @@ Add this entry alongside Guix in the consumer's channel configuration:
  (commit "REPLACE-WITH-PUBLISHED-COMMIT"))
 #+end_src
 
+** Network UPS Tools
+
+=(spartan packages nut)= exports =nut=, Network UPS Tools 2.8.5, with USB,
+serial and SNMP drivers, OpenSSL support, =upsd= and command-line clients.
+Optional protocol drivers whose libraries are absent (such as Modbus and IPMI)
+are not built.
+
+=(spartan services nut)= provides =upsd-service-type= and =upsd-configuration=.
+Add a service to the consuming operating system's =services=:
+
+#+begin_src scheme
+(use-modules (gnu services) (spartan services nut))
+
+(service upsd-service-type
+         (upsd-configuration
+          (ups (list (nut-ups
+                      (name "office")
+                      (driver "usbhid-ups")
+                      (port "auto")
+                      (extra-config "vendorid = 051d\nserial = YOUR-SERIAL\n"))))
+          ;; Optional absolute path supplied by the host's secret provisioning.
+          (users-file "/run/secrets/upsd.users")))
+#+end_src
+
+Select the driver for the exact model and connection type from
+https://networkupstools.org/stable-hcl.html. Each =nut-ups= requires a unique
+=name= and a =driver= executable name; =port= defaults to =auto=. Its
+=extra-config= is appended to that device's =ups.conf= section. Only declared
+drivers are started, one foreground Shepherd service named =nut-driver-NAME=
+per device. =upsd= starts after these services and networking. Shepherd restarts
+failed processes; NUT handles reconnecting to driver sockets and UPS hardware.
+
+The service creates a =nut= account, its =/run/nut= state directory, and
+=/etc/nut= configuration; installs the package in the system profile; and
+extends udev with upstream USB permissions for the =nut= group. Serial UPS
+devices require host-provided device permissions granting =nut= access.
+
+=upsd-configuration-extra-config= supplies the entire =upsd.conf=, defaulting
+to =LISTEN 127.0.0.1 3493=. Set explicit =LISTEN= lines for LAN clients.
+=package= can override the default =nut= package. Public configuration is stored
+in the Guix store: keep passwords out of =extra-config=. When =users-file= is
+set, provision it before system activation, including at boot. Activation copies
+it to root-owned =/run/nut-config/upsd.users= with mode 0640 and group =nut=;
+the original can remain root-readable only. Without it, an empty users file
+allows status queries but no authenticated administration. Re-activate and
+restart =upsd= after credential changes. This service serves UPS data; automatic
+host shutdown requires a separately configured =upsmon= deployment.
+
+#+begin_src sh
+guix build -L modules nut
+guix repl -L modules tests/nut.scm
+python3 tests/nut-runtime.py "$(guix build -L modules nut --no-grafts)"
+herd status upsd
+upsc office@localhost
+#+end_src
+
+The optional runtime smoke test uses =dummy-ups= and a loopback port and needs
+no UPS hardware. Replug an already connected USB UPS after deploying its udev
+rules if it retains its old permissions.
+
 ** Raspberry Pi
 
 =(gnu system images raspberrypi)= exports:
