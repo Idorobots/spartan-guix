@@ -15,11 +15,13 @@
                         (branch "main")
                         (commit commit))
                        ;; Select CI's Guix version here. Runtime dependencies
-                       ;; such as Nonguix are resolved from .guix-channel.
+                       ;; such as Nonguix are resolved from .guix-channel, whose
+                       ;; pins take precedence: do not duplicate them here, or
+                       ;; Guix would use this list's pin instead.
                        (channel
                         (name 'guix)
                         (url "https://git.guix.gnu.org/guix.git")
-                         (commit "8254400c4387881b134bc7b89adeaaa50d0cee81")
+                         (commit "2bc642182e5e7914c1ea4deb696b8e3566b12b3f")
                         (introduction
                          (make-channel-introduction
                           "9edb3f66fd807b096b48283debdcddccfea34bad"
