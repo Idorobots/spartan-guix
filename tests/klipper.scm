@@ -1,0 +1,74 @@
+(use-modules (gnu) (gnu services) (gnu services shepherd)
+             (guix gexp) (guix monads) (guix store) (ice-9 textual-ports)
+             (spartan build klipper) (spartan services klipper)
+             (srfi srfi-1) (srfi srfi-64))
+
+(test-begin "klipper")
+(define runner (test-runner-current))
+(define test-dir (mkdtemp "/tmp/spartan-klipper-XXXXXX"))
+(define state (string-append test-dir "/state"))
+(define run (string-append test-dir "/run"))
+(define seed (string-append test-dir "/seed.cfg"))
+(define config-file (string-append state "/printer.cfg"))
+(define (write-text path text)
+  (call-with-output-file path (lambda (port) (display text port))))
+(define (read-text path)
+  (call-with-input-file path get-string-all))
+
+(write-text seed "initial configuration\n")
+(initialize-klipper-state state run seed (getuid) (getgid))
+(test-equal "initial configuration is copied" "initial configuration\n"
+  (read-text config-file))
+(test-equal "configuration is writable by its owner" #o640
+  (logand #o777 (stat:mode (stat config-file))))
+(write-text config-file "calibrated configuration\n")
+(write-text seed "updated seed\n")
+(initialize-klipper-state state run seed (getuid) (getgid))
+(test-equal "subsequent activation preserves calibration" "calibrated configuration\n"
+  (read-text config-file))
+
+(define config
+  (klipper-configuration (config-file (plain-file "printer.cfg" "[printer]\n"))))
+(define (extension target)
+  (find (lambda (item) (eq? target (service-extension-target item)))
+        (service-type-extensions klipper-service-type)))
+(define shepherd
+  ((service-extension-compute (extension shepherd-root-service-type)) config))
+(test-equal "one Klipper process" '((klipper))
+  (map shepherd-service-provision shepherd))
+(test-assert "service uses writable configuration, socket and dialout"
+  (let ((form (gexp->approximate-sexp (shepherd-service-start (car shepherd)))))
+    (and (member "/var/lib/klipper/printer.cfg" (cadr form))
+         (member "/run/klipper/klippy.sock" (cadr form))
+         (member ''("dialout") form))))
+(test-error "reject store-backed writable state" #t
+  ((service-extension-compute (extension activation-service-type))
+   (klipper-configuration (config-file (plain-file "printer.cfg" ""))
+                          (state-directory "/gnu/store/printer"))))
+(test-assert "activation code and its seed lower to a derivation"
+  (with-store store
+    (run-with-store store
+      (gexp->derivation "klipper-activation-test"
+                        ((service-extension-compute
+                          (extension activation-service-type)) config)))))
+(test-assert "service integrates with base Guix System services"
+  (let* ((os (operating-system
+              (host-name "klipper-test") (timezone "Etc/UTC") (locale "en_US.utf8")
+              (bootloader (bootloader-configuration
+                           (bootloader grub-bootloader) (targets '("/dev/sda"))))
+              (file-systems (cons (file-system
+                                   (device "/dev/sda1") (mount-point "/")
+                                   (type "ext4"))
+                                  %base-file-systems))
+              (services (cons (service klipper-service-type config)
+                              %base-services))))
+         (services (shepherd-configuration-services
+                    (service-value
+                     (fold-services (operating-system-services os)
+                                    #:target-type shepherd-root-service-type)))))
+    (assert-valid-graph services)
+    (any (lambda (item) (memq 'klipper (shepherd-service-provision item)))
+         services)))
+(system* "rm" "-rf" test-dir)
+(test-end "klipper")
+(exit (zero? (test-runner-fail-count runner)))

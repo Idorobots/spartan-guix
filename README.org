@@ -13,6 +13,50 @@ Add this entry alongside Guix in the consumer's channel configuration:
  (commit "REPLACE-WITH-PUBLISHED-COMMIT"))
 #+end_src
 
+** Klipper
+
+=(spartan packages klipper)= provides Klipper 0.13.0's host software, MCU
+firmware source and upstream flashing tools.  The C helpers are compiled when
+the package is built.  =(spartan services klipper)= provides a generic
+Shepherd service; the consumer supplies a printer-specific initial config:
+
+#+begin_src scheme
+(use-modules (gnu services) (guix gexp) (spartan services klipper))
+
+(service klipper-service-type
+         (klipper-configuration
+          (config-file (local-file "printer.cfg"))))
+#+end_src
+
+On first activation the seed is copied to =/var/lib/klipper/printer.cfg=,
+owned by the =klipper= account.  Subsequent activations preserve that file,
+including changes made by Klipper's =SAVE_CONFIG=.  Changes to the declarative
+seed do not overwrite the existing runtime file.  Capture calibration changes
+in the Guix source yourself.  Klipper resolves includes relative to the runtime
+file, so supply additional included files in that directory yourself.  The
+=state-directory= and =run-directory= fields override the defaults; Klippy
+creates its API socket at =/run/klipper/klippy.sock= and its G-code PTY at
+=/run/klipper/printer=.  The service runs as =klipper= with the =dialout=
+supplementary group; arrange device permissions appropriate to the board.
+
+For MCU firmware, copy the installed source into a writable directory and
+choose the board's configuration and cross compiler as documented by Klipper:
+
+#+begin_src sh
+cp -r "$(guix build klipper)/share/klipper" ./klipper-build
+chmod -R u+w ./klipper-build
+cd klipper-build
+make menuconfig
+make
+#+end_src
+
+Install the board-specific compiler and flash utility separately (for example,
+an ARM or AVR cross compiler and =dfu-util= or =avrdude=).  The package exposes
+=klipper-flash-sdcard= for supported boards already running Klipper; use =-l=
+to list them and =-f= and =-d= to select firmware and its matching dictionary.
+Stop Klippy while flashing.  Some boards require a manual SD-card flash or
+bootloader entry; consult the board and Klipper documentation.
+
 ** Network UPS Tools
 
 =(spartan packages nut)= exports =nut=, Network UPS Tools 2.8.5, with USB,
