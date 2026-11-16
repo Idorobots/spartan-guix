@@ -60,21 +60,22 @@
                 ;; Klippy reads this when the installed tree has no Git metadata.
                 (call-with-output-file (string-append root "/klippy/.version")
                   (lambda (port) (display #$version port) (newline port)))
+                ;; Make the firmware build self-contained with respect to
+                ;; Python, including when this tree is copied into /run.
+                ;; Board-specific compilers and flashing utilities stay external.
+                (substitute* (string-append root "/Makefile")
+                  (("^PYTHON=python3")
+                   (string-append "PYTHON=" python "\n"
+                                  "export GUIX_PYTHONPATH := " python-path)))
+                ;; Upstream's SD-card script assumes ~/klippy-env.  Set its
+                ;; interpreter and dependencies in the script itself so a
+                ;; writable copy still uses its own local firmware outputs.
+                ;; A wrap-program wrapper here would point back into the store.
+                (substitute* (string-append root "/scripts/flash-sdcard.sh")
+                  (("^KLIPPY_ENV=.*")
+                   (format #f "KLIPPY_ENV=~s~%export GUIX_PYTHONPATH=~s${GUIX_PYTHONPATH:+:}$GUIX_PYTHONPATH~%"
+                           python python-path)))
                 (mkdir-p bin)
-                (let ((python-wrapper (string-append bin "/klipper-python")))
-                  ;; Make Python's Guix dependencies available to both Klippy
-                  ;; and the upstream flashing utilities outside a build shell.
-                  (call-with-output-file python-wrapper
-                    (lambda (port)
-                      (format port "#!/bin/sh~%exec ~s \"$@\"~%" python)))
-                  (chmod python-wrapper #o755)
-                  (wrap-program python-wrapper
-                    `("GUIX_PYTHONPATH" prefix (,python-path)))
-                  ;; Upstream's SD-card script assumes ~/klippy-env; use the
-                  ;; packaged interpreter and dependencies instead.
-                  (substitute* (string-append root "/scripts/flash-sdcard.sh")
-                    (("KLIPPY_ENV=.*")
-                     (string-append "KLIPPY_ENV=\"" python-wrapper "\"\n"))))
                 ;; Expose stable entry points without modifying Klipper's
                 ;; source layout, which its scripts use for relative imports.
                 (for-each
@@ -83,14 +84,15 @@
                      (call-with-output-file file
                        (lambda (port)
                          (format port "#!/bin/sh~%exec ~s ~s \"$@\"~%"
-                                 (cdr entry)
-                                 (string-append root
-                                                (if (string=? (car entry) "klippy")
-                                                    "/klippy/klippy.py"
-                                                    "/scripts/flash-sdcard.sh")))))
+                                 (cadr entry)
+                                 (string-append root (caddr entry)))))
                      (chmod file #o755)))
-                 `(("klippy" . ,(string-append bin "/klipper-python"))
-                   ("klipper-flash-sdcard" . ,(which "bash"))))))))))
+                 `(("klippy" ,python "/klippy/klippy.py")
+                   ("klipper-flash-sdcard" ,(which "bash") "/scripts/flash-sdcard.sh")))
+                ;; Only the Klippy entry point needs wrapping; the SD-card
+                ;; script and firmware Makefile already set their environment.
+                (wrap-program (string-append bin "/klippy")
+                  `("GUIX_PYTHONPATH" prefix (,python-path)))))))))
     (inputs (list python python-cffi python-greenlet python-jinja2
                   python-pyserial python-can python-setuptools))
     (home-page "https://www.klipper3d.org/")

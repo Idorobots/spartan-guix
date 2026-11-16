@@ -55,13 +55,14 @@ configuration and cross compiler as documented by Klipper:
 #+begin_src sh
 sudo -i
 cd /run/klipper/firmware
-make PYTHON=klipper-python menuconfig
-make PYTHON=klipper-python
+make menuconfig
+make
 #+end_src
 
 Install =make=, the board-specific compiler and flash utility separately (for
 example, an ARM or AVR cross compiler and =dfu-util= or =avrdude=).
-=PYTHON=klipper-python= uses the package's Python interpreter and dependencies.
+The firmware Makefile and SD-card script use the packaged Python interpreter
+and dependencies automatically.
 The workspace's =scripts/flash-sdcard.sh= uses its local =out/klipper.bin= and
 =out/klipper.dict= by default.  The package also exposes
 =klipper-flash-sdcard= for supported boards already running Klipper; use =-l=
