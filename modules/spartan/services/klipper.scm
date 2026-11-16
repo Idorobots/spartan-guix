@@ -11,6 +11,7 @@
   #:export (klipper-configuration klipper-configuration?
             klipper-configuration-package klipper-configuration-config-file
             klipper-configuration-state-directory klipper-configuration-run-directory
+            klipper-configuration-firmware-workspace?
             klipper-configuration-shepherd-requirement klipper-service-type))
 
 (define-record-type* <klipper-configuration>
@@ -20,12 +21,17 @@
   (state-directory klipper-configuration-state-directory
                    (default "/var/lib/klipper"))
   (run-directory klipper-configuration-run-directory (default "/run/klipper"))
+  (firmware-workspace? klipper-configuration-firmware-workspace? (default #f))
   (shepherd-requirement klipper-configuration-shepherd-requirement (default '())))
 
 (define (klipper-activation config)
   (let ((state (klipper-configuration-state-directory config))
         (run (klipper-configuration-run-directory config))
-        (seed (klipper-configuration-config-file config)))
+        (seed (klipper-configuration-config-file config))
+        (firmware-source
+         (and (klipper-configuration-firmware-workspace? config)
+              (file-append (klipper-configuration-package config)
+                           "/share/klipper"))))
     (define (usable-directory? path)
       (and (string? path) (string-prefix? "/" path)
            (not (member path '("/" "/var" "/run" "/gnu/store")))
@@ -41,7 +47,8 @@
           (let ((account (getpwnam "klipper")))
             (initialize-klipper-state #$state #$run #$seed
                                       (passwd:uid account)
-                                      (passwd:gid account)))))))
+                                      (passwd:gid account)
+                                      #:firmware-source #$firmware-source))))))
 
 (define (klipper-shepherd-services config)
   (let ((package (klipper-configuration-package config))

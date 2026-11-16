@@ -25,7 +25,8 @@ Shepherd service; the consumer supplies a printer-specific initial config:
 
 (service klipper-service-type
          (klipper-configuration
-          (config-file (local-file "printer.cfg"))))
+          (config-file (local-file "printer.cfg"))
+          (firmware-workspace? #t)))
 #+end_src
 
 On first activation the seed is copied to =/var/lib/klipper/printer.cfg=,
@@ -39,23 +40,36 @@ creates its API socket at =/run/klipper/klippy.sock= and its G-code PTY at
 =/run/klipper/printer=.  The service runs as =klipper= with the =dialout=
 supplementary group; arrange device permissions appropriate to the board.
 
-For MCU firmware, copy the installed source into a writable directory and
-choose the board's configuration and cross compiler as documented by Klipper:
+The optional =firmware-workspace?= flag (default =#f=) prepares a writable copy
+of the package's firmware source and flashing tools at
+=/run/klipper/firmware= during system activation.  It follows =run-directory=
+when overridden and is owned by =klipper=.  Reconfiguration preserves an
+existing workspace, including =.config= and build outputs; rebooting clears it
+and prepares a fresh copy from the currently installed package.  Save any board
+configuration and firmware you want to keep outside =/run=.  Disabling the flag
+leaves an existing workspace in place until reboot.
+
+Use an administrative shell to access the workspace, and choose the board's
+configuration and cross compiler as documented by Klipper:
 
 #+begin_src sh
-cp -r "$(guix build klipper)/share/klipper" ./klipper-build
-chmod -R u+w ./klipper-build
-cd klipper-build
-make menuconfig
-make
+sudo -i
+cd /run/klipper/firmware
+make PYTHON=klipper-python menuconfig
+make PYTHON=klipper-python
 #+end_src
 
-Install the board-specific compiler and flash utility separately (for example,
-an ARM or AVR cross compiler and =dfu-util= or =avrdude=).  The package exposes
+Install =make=, the board-specific compiler and flash utility separately (for
+example, an ARM or AVR cross compiler and =dfu-util= or =avrdude=).
+=PYTHON=klipper-python= uses the package's Python interpreter and dependencies.
+The workspace's =scripts/flash-sdcard.sh= uses its local =out/klipper.bin= and
+=out/klipper.dict= by default.  The package also exposes
 =klipper-flash-sdcard= for supported boards already running Klipper; use =-l=
 to list them and =-f= and =-d= to select firmware and its matching dictionary.
-Stop Klippy while flashing.  Some boards require a manual SD-card flash or
-bootloader entry; consult the board and Klipper documentation.
+Workspace setup does not build or flash firmware.  Stop Klippy with
+=herd stop klipper= before flashing and restart it with =herd start klipper=
+afterward.  Some boards require a manual SD-card flash or bootloader entry;
+consult the board and Klipper documentation.
 
 ** Network UPS Tools
 

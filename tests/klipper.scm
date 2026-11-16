@@ -1,4 +1,4 @@
-(use-modules (gnu) (gnu services) (gnu services shepherd)
+(use-modules (gnu) (gnu services) (gnu services shepherd) (guix build utils)
              (guix gexp) (guix monads) (guix store) (ice-9 textual-ports)
              (spartan build klipper) (spartan services klipper)
              (srfi srfi-1) (srfi srfi-64))
@@ -26,9 +26,59 @@
 (initialize-klipper-state state run seed (getuid) (getgid))
 (test-equal "subsequent activation preserves calibration" "calibrated configuration\n"
   (read-text config-file))
+(define workspace (string-append run "/firmware"))
+(test-assert "firmware workspace is not created by default"
+  (not (file-exists? workspace)))
+
+;; Model the immutable installed source, including an executable flashing tool
+;; and a symlink whose target must not have its permissions changed.
+(define firmware-source (string-append test-dir "/source"))
+(mkdir-p (string-append firmware-source "/scripts"))
+(write-text (string-append firmware-source "/Makefile") "firmware build\n")
+(write-text (string-append firmware-source "/scripts/flash.sh") "#!/bin/sh\n")
+(chmod (string-append firmware-source "/Makefile") #o444)
+(chmod (string-append firmware-source "/scripts/flash.sh") #o555)
+(symlink (string-append firmware-source "/Makefile")
+         (string-append firmware-source "/source-link"))
+(initialize-klipper-state state run seed (getuid) (getgid)
+                          #:firmware-source firmware-source)
+(test-assert "firmware copy is writable, owned correctly and retains executable tools"
+  (let ((makefile (stat (string-append workspace "/Makefile")))
+        (script (stat (string-append workspace "/scripts/flash.sh"))))
+    (and (string=? "firmware build\n" (read-text (string-append workspace "/Makefile")))
+         (= (getuid) (stat:uid makefile))
+         (= (getgid) (stat:gid makefile))
+         (= #o200 (logand #o200 (stat:perms makefile)))
+         (= #o300 (logand #o300 (stat:perms script)))
+         (= #o750 (stat:perms (stat workspace)))
+         (eq? 'symlink (stat:type (lstat (string-append workspace "/source-link"))))
+         (= #o444 (stat:perms (stat (string-append firmware-source "/Makefile")))))))
+(write-text (string-append workspace "/.config") "board settings\n")
+(mkdir (string-append workspace "/out"))
+(write-text (string-append workspace "/out/klipper.bin") "built firmware\n")
+(write-text (string-append firmware-source "/new-source") "new package\n")
+(initialize-klipper-state state run seed (getuid) (getgid)
+                          #:firmware-source firmware-source)
+(test-assert "reconfiguration preserves the current firmware build without merging source"
+  (and (string=? "board settings\n" (read-text (string-append workspace "/.config")))
+       (string=? "built firmware\n" (read-text (string-append workspace "/out/klipper.bin")))
+       (not (file-exists? (string-append workspace "/new-source")))))
+(delete-file-recursively run)
+(initialize-klipper-state state run seed (getuid) (getgid)
+                          #:firmware-source firmware-source)
+(test-assert "a cleared runtime directory gets fresh source while printer calibration persists"
+  (and (file-exists? (string-append workspace "/new-source"))
+       (not (file-exists? (string-append workspace "/.config")))
+       (not (file-exists? (string-append workspace "/out")))
+       (string=? "calibrated configuration\n" (read-text config-file))))
 
 (define config
   (klipper-configuration (config-file (plain-file "printer.cfg" "[printer]\n"))))
+(define firmware-config
+  (klipper-configuration (inherit config) (firmware-workspace? #t)))
+(test-assert "firmware workspace is opt-in"
+  (and (not (klipper-configuration-firmware-workspace? config))
+       (klipper-configuration-firmware-workspace? firmware-config)))
 (define (extension target)
   (find (lambda (item) (eq? target (service-extension-target item)))
         (service-type-extensions klipper-service-type)))
@@ -51,6 +101,12 @@
       (gexp->derivation "klipper-activation-test"
                         ((service-extension-compute
                           (extension activation-service-type)) config)))))
+(test-assert "activation with firmware workspace lowers to a derivation"
+  (with-store store
+    (run-with-store store
+      (gexp->derivation "klipper-firmware-activation-test"
+                        ((service-extension-compute
+                          (extension activation-service-type)) firmware-config)))))
 (test-assert "service integrates with base Guix System services"
   (let* ((os (operating-system
               (host-name "klipper-test") (timezone "Etc/UTC") (locale "en_US.utf8")
@@ -60,7 +116,7 @@
                                    (device "/dev/sda1") (mount-point "/")
                                    (type "ext4"))
                                   %base-file-systems))
-              (services (cons (service klipper-service-type config)
+              (services (cons (service klipper-service-type firmware-config)
                               %base-services))))
          (services (shepherd-configuration-services
                     (service-value
