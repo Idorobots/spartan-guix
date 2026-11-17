@@ -95,6 +95,67 @@
   ((service-extension-compute (extension activation-service-type))
    (klipper-configuration (config-file (plain-file "printer.cfg" ""))
                           (state-directory "/gnu/store/printer"))))
+(define (activation-error config)
+  (catch 'misc-error
+    (lambda ()
+      ((service-extension-compute (extension activation-service-type)) config)
+      #f)
+    (lambda (key subr message arguments . rest)
+      (apply format #f message arguments))))
+(for-each
+ (lambda (case)
+   (test-assert (car case)
+     (let ((message (activation-error
+                     (klipper-configuration
+                      (inherit config)
+                      (state-directory (cadr case))
+                      (run-directory (caddr case))))))
+       (and message (string-contains message (cadddr case))))))
+ '(("relative state directory reports its field"
+    "relative" "/run/klipper" "state-directory")
+   ("non-string run directory reports its field"
+    "/var/lib/klipper" #f "run-directory")
+   ("normalized store path is rejected"
+    "//gnu///store/printer/" "/run/klipper" "state-directory")
+   ("normalized shared directory is rejected"
+    "/var/lib/klipper" "//run///" "run-directory")
+   ("dot components are rejected"
+    "/var/./lib/klipper" "/run/klipper" "state-directory")
+   ("parent components are rejected"
+    "/var/lib/klipper" "/run/other/../klipper" "run-directory")
+   ("trailing slashes cannot disguise identical directories"
+    "/srv/klipper" "/srv/klipper/" "must be distinct")
+   ("repeated slashes cannot disguise identical directories"
+    "/srv//klipper" "//srv/klipper///" "must be distinct")))
+(for-each
+ (lambda (value)
+   (test-assert (format #f "firmware-workspace? rejects non-boolean ~s" value)
+     (let ((message (activation-error
+                     (klipper-configuration
+                      (inherit config) (firmware-workspace? value)))))
+       (and message (string-contains message "firmware-workspace?")))))
+ '("yes" 1 ()))
+(define normalized-config
+  (klipper-configuration
+   (inherit firmware-config)
+   (state-directory "/srv//klipper///")
+   (run-directory "//run//klipper///")))
+(test-equal "activation uses normalized directory paths"
+  '("/srv/klipper" "/run/klipper")
+  (let* ((form (gexp->approximate-sexp
+                ((service-extension-compute (extension activation-service-type))
+                 normalized-config)))
+         (call (caddr (caddr form))))
+    (take (cdr call) 2)))
+(test-assert "Shepherd uses the same normalized paths as activation"
+  (let* ((services ((service-extension-compute (extension shepherd-root-service-type))
+                    normalized-config))
+         (form (gexp->approximate-sexp (shepherd-service-start (car services)))))
+    (and (member "/srv/klipper/printer.cfg" (cadr form))
+         (member "/run/klipper/klippy.sock" (cadr form)))))
+(test-error "Shepherd also validates firmware-workspace?" #t
+  ((service-extension-compute (extension shepherd-root-service-type))
+   (klipper-configuration (inherit config) (firmware-workspace? "yes"))))
 (test-assert "activation code and its seed lower to a derivation"
   (with-store store
     (run-with-store store

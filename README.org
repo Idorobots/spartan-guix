@@ -17,7 +17,10 @@ Add this entry alongside Guix in the consumer's channel configuration:
 
 =(spartan packages klipper)= provides Klipper 0.13.0's host software, MCU
 firmware source and upstream flashing tools.  The C helpers are compiled when
-the package is built.  =(spartan services klipper)= provides a generic
+the package is built.  The installed source contains the host modules, MCU
+sources, bundled libraries, configurations and supporting scripts; upstream
+documentation, tests and CI metadata are omitted from the firmware workspace.
+=(spartan services klipper)= provides a generic
 Shepherd service; the consumer supplies a printer-specific initial config:
 
 #+begin_src scheme
@@ -39,6 +42,9 @@ file, so supply additional included files in that directory yourself.  The
 creates its API socket at =/run/klipper/klippy.sock= and its G-code PTY at
 =/run/klipper/printer=.  The service runs as =klipper= with the =dialout=
 supplementary group; arrange device permissions appropriate to the board.
+Directory overrides must be distinct absolute service directories outside the
+Guix store, without =.= or =..= components.  Repeated and trailing slashes are
+normalized before validation and use.
 
 The optional =firmware-workspace?= flag (default =#f=) prepares a writable copy
 of the package's firmware source and flashing tools at

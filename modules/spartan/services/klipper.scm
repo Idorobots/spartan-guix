@@ -24,23 +24,44 @@
   (firmware-workspace? klipper-configuration-firmware-workspace? (default #f))
   (shepherd-requirement klipper-configuration-shepherd-requirement (default '())))
 
+(define (normalize-klipper-directory field path)
+  (unless (and (string? path) (string-prefix? "/" path))
+    (error "Klipper directory must be an absolute path" field path))
+  ;; Normalize lexically: these directories may not exist on the build host.
+  ;; Reject dot components rather than interpreting paths through symlinks.
+  (let* ((components (remove string-null? (string-split path #\/)))
+         (normalized (string-append "/" (string-join components "/"))))
+    (when (any (lambda (component) (member component '("." ".."))) components)
+      (error "Klipper directory must not contain . or .. components" field path))
+    (when (or (member normalized '("/" "/var" "/run" "/gnu/store"))
+              (string-prefix? "/gnu/store/" normalized))
+      (error "Klipper directory must be a writable service directory" field path))
+    normalized))
+
+(define (validate-klipper-configuration config)
+  (let ((state (normalize-klipper-directory
+                'state-directory (klipper-configuration-state-directory config)))
+        (run (normalize-klipper-directory
+              'run-directory (klipper-configuration-run-directory config))))
+    (when (string=? state run)
+      (error "Klipper state-directory and run-directory must be distinct" state run))
+    (unless (boolean? (klipper-configuration-firmware-workspace? config))
+      (error "Klipper firmware-workspace? must be a boolean"
+             (klipper-configuration-firmware-workspace? config)))
+    (klipper-configuration
+     (inherit config)
+     (state-directory state)
+     (run-directory run))))
+
 (define (klipper-activation config)
-  (let ((state (klipper-configuration-state-directory config))
-        (run (klipper-configuration-run-directory config))
-        (seed (klipper-configuration-config-file config))
-        (firmware-source
-         (and (klipper-configuration-firmware-workspace? config)
-              (file-append (klipper-configuration-package config)
-                           "/share/klipper"))))
-    (define (usable-directory? path)
-      (and (string? path) (string-prefix? "/" path)
-           (not (member path '("/" "/var" "/run" "/gnu/store")))
-           (not (string-prefix? "/gnu/store/" path))
-           (every (lambda (component) (not (member component '("." ".."))))
-                  (string-split path #\/))))
-    (unless (and (usable-directory? state) (usable-directory? run)
-                 (not (string=? state run)))
-      (error "Klipper requires distinct writable absolute state and run directories"))
+  (let* ((config (validate-klipper-configuration config))
+         (state (klipper-configuration-state-directory config))
+         (run (klipper-configuration-run-directory config))
+         (seed (klipper-configuration-config-file config))
+         (firmware-source
+          (and (klipper-configuration-firmware-workspace? config)
+               (file-append (klipper-configuration-package config)
+                            "/share/klipper"))))
     (with-imported-modules (source-module-closure '((spartan build klipper)))
       #~(begin
           (use-modules (spartan build klipper))
@@ -51,9 +72,10 @@
                                       #:firmware-source #$firmware-source))))))
 
 (define (klipper-shepherd-services config)
-  (let ((package (klipper-configuration-package config))
-        (state (klipper-configuration-state-directory config))
-        (run (klipper-configuration-run-directory config)))
+  (let* ((config (validate-klipper-configuration config))
+         (package (klipper-configuration-package config))
+         (state (klipper-configuration-state-directory config))
+         (run (klipper-configuration-run-directory config)))
     (list
      (shepherd-service
       (documentation "Run the Klipper host software.")
