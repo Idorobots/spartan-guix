@@ -16,7 +16,8 @@
   #:use-module (gnu packages python-crypto)
   #:use-module (gnu packages python-web)
   #:use-module (gnu packages python-xyz)
-  #:use-module (gnu packages tls))
+  #:use-module (gnu packages tls)
+  #:use-module (spartan packages moonraker-provider-shepherd))
 
 (define python-paho-mqtt/renewed-tests
   (package
@@ -160,6 +161,11 @@ SPI, I2C, MMIO and serial interfaces on Linux.")
      (list
       #:phases
       #~(modify-phases %standard-phases
+          (add-after 'unpack 'register-shepherd-provider
+            (lambda _
+              (invoke "patch" "--batch" "--fuzz=0" "-p1" "-i"
+                      #$(file-append moonraker-provider-shepherd
+                                     "/share/moonraker-provider-shepherd/patches/moonraker-0.11.0-shepherd.patch"))))
           (add-after 'unpack 'configure-build
             (lambda _
               ;; Release archives have no Git metadata.  PDM accepts a fixed
@@ -195,7 +201,10 @@ SPI, I2C, MMIO and serial interfaces on Linux.")
                          "'history', 'machine', 'mqtt', 'notifier', 'ldap', 'zeroconf']; "
                          "[importlib.import_module('moonraker.components.' + m) "
                          "for m in mods]; "
-                         "import preprocess_cancellation")))))
+                         "import preprocess_cancellation; "
+                         "from moonraker_provider_shepherd.provider import ShepherdProvider; "
+                         "from moonraker.components.machine import BaseProvider; "
+                         "assert issubclass(ShepherdProvider, BaseProvider)")))))
           (add-after 'wrap 'wrap-system-tools
             (lambda _
               ;; Machine information invokes these commands even with the
@@ -220,7 +229,7 @@ SPI, I2C, MMIO and serial interfaces on Linux.")
            python-paho-mqtt/renewed-tests python-zeroconf/moonraker
            python-preprocess-cancellation python-jinja2
            python-dbus-fast python-apprise python-ldap3 python-periphery
-           python-importlib-metadata
+           python-importlib-metadata moonraker-provider-shepherd
            ;; Prevent runtime pip installation when importing an old database.
            python-lmdb))
     (home-page "https://moonraker.readthedocs.io/")

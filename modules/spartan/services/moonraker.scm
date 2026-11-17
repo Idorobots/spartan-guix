@@ -2,20 +2,30 @@
   #:use-module (gnu services)
   #:use-module (gnu services base)
   #:use-module (gnu services shepherd)
+  #:use-module (gnu system)
   #:use-module (guix gexp)
   #:use-module (guix modules)
   #:use-module (guix records)
   #:use-module (spartan packages moonraker)
+  #:use-module (spartan packages moonraker-provider-shepherd)
   #:use-module (srfi srfi-1)
   #:export (%moonraker-default-config
             moonraker-configuration moonraker-configuration?
             moonraker-configuration-package moonraker-configuration-config-file
             moonraker-configuration-data-directory
             moonraker-configuration-klipper-state-directory
+            moonraker-configuration-managed-services
+            moonraker-configuration-power-actions
+            moonraker-configuration-shepherd-socket
+            moonraker-configuration-shepherd-timeout
+            moonraker-config-file moonraker-shepherd-policy moonraker-sudoers-file
             moonraker-configuration-shepherd-requirement moonraker-service-type))
 
 (define %moonraker-default-config
-  (local-file "moonraker.conf"))
+  ;; Expression-based Guix evaluation may omit source locations. Resolve through
+  ;; the channel load path rather than the caller's working directory.
+  (local-file (canonicalize-path
+               (search-path %load-path "spartan/services/moonraker.conf"))))
 
 (define-record-type* <moonraker-configuration>
   moonraker-configuration make-moonraker-configuration moonraker-configuration?
@@ -26,7 +36,54 @@
                   (default "/var/lib/moonraker"))
   (klipper-state-directory moonraker-configuration-klipper-state-directory
                            (default "/var/lib/klipper"))
+  (managed-services moonraker-configuration-managed-services
+                    (default '(("klipper" start stop restart) ("moonraker" restart))))
+  (power-actions moonraker-configuration-power-actions (default '(poweroff reboot)))
+  (shepherd-socket moonraker-configuration-shepherd-socket
+                   (default "/var/run/shepherd/socket"))
+  (shepherd-timeout moonraker-configuration-shepherd-timeout (default 60))
   (shepherd-requirement moonraker-configuration-shepherd-requirement (default '())))
+
+(define (management-service-name? name)
+  (and (string? name) (not (string-null? name))
+       (not (member name '("root" "shepherd")))
+       (every (lambda (char)
+                (or (char<=? #\a char #\z) (char<=? #\A char #\Z)
+                    (char<=? #\0 char #\9) (memv char '(#\_ #\-))))
+              (string->list name))))
+
+(define (validate-management-configuration config)
+  (let ((services (moonraker-configuration-managed-services config))
+        (power (moonraker-configuration-power-actions config))
+        (socket (moonraker-configuration-shepherd-socket config))
+        (timeout (moonraker-configuration-shepherd-timeout config)))
+    ;; Match the released helper's data contract before serializing policy or
+    ;; sudoers commands. In particular, never interpolate arbitrary arguments.
+    (unless (and (list? services)
+                 (every (lambda (entry)
+                          (and (pair? entry) (management-service-name? (car entry))
+                               (list? (cdr entry))
+                               (every (lambda (action)
+                                        (memq action '(start stop restart)))
+                                      (cdr entry))
+                               (= (length (cdr entry))
+                                  (length (delete-duplicates (cdr entry))))
+                               (or (not (string=? (car entry) "moonraker"))
+                                   (every (lambda (action) (eq? action 'restart))
+                                          (cdr entry)))))
+                        services)
+                 (= (length services)
+                    (length (delete-duplicates (map car services))))
+                 (assoc "moonraker" services))
+      (error "Invalid Moonraker managed-services; Moonraker permits only restart" services))
+    (unless (and (list? power)
+                 (every (lambda (action) (memq action '(poweroff reboot halt))) power)
+                 (= (length power) (length (delete-duplicates power))))
+      (error "Invalid Moonraker power-actions" power))
+    (unless (and (string? socket) (string-prefix? "/" socket))
+      (error "Moonraker shepherd-socket must be absolute" socket))
+    (unless (and (real? timeout) (finite? timeout) (> timeout 0))
+      (error "Moonraker shepherd-timeout must be finite and positive" timeout))))
 
 (define (normalize-moonraker-directory field path)
   (unless (and (string? path) (string-prefix? "/" path))
@@ -54,12 +111,72 @@
       (error "Moonraker data-directory and klipper-state-directory must not overlap"
              data state))
     (validate-moonraker-config-file (moonraker-configuration-config-file config))
+    (validate-management-configuration config)
     (moonraker-configuration
      (inherit config) (data-directory data) (klipper-state-directory state))))
 
 (define (validate-moonraker-config-file file)
-  (unless (or (file-like? file) (and (string? file) (string-prefix? "/" file)))
+  (unless (or (file-like? file)
+              (and (string? file) (string-prefix? "/" file)
+                   (not (string-any
+                         (lambda (char)
+                           (memv char '(#\newline #\return #\[ #\] #\* #\?)))
+                         file))))
     (error "Moonraker config-file must be file-like or an absolute path" file)))
+
+(define (moonraker-shepherd-policy config)
+  "Return the immutable management policy for CONFIG."
+  (let ((config (validate-moonraker-configuration config)))
+    (plain-file "moonraker-shepherd-policy.scm"
+                (format #f "~s~%"
+                        `((version . 1)
+                          (socket . ,(moonraker-configuration-shepherd-socket config))
+                          (moonraker-service . "moonraker")
+                          (services . ,(moonraker-configuration-managed-services config))
+                          (power . ,(moonraker-configuration-power-actions config)))))))
+
+(define (moonraker-config-file config)
+  "Compose CONFIG's application file with its generated machine settings."
+  (let ((config (validate-moonraker-configuration config)))
+    ;; Includes retain the original file's directory for relative includes and
+    ;; can refer to a runtime file. The final machine section is authoritative.
+    (mixed-text-file
+     "moonraker.conf"
+     "[include " (moonraker-configuration-config-file config) "]\n\n"
+     "[machine]\nprovider: shepherd\nvalidate_service: False\nvalidate_config: False\n"
+     "shepherd_helper: " (file-append moonraker-provider-shepherd
+                                    "/bin/moonraker-shepherd") "\n"
+     "shepherd_policy: " (moonraker-shepherd-policy config) "\n"
+     "shepherd_sudo: /run/privileged/bin/sudo\n"
+     "shepherd_timeout: "
+     (number->string
+      (exact->inexact (moonraker-configuration-shepherd-timeout config))) "\n")))
+
+(define* (moonraker-sudoers-file config #:optional (base %sudoers-specification))
+  "Compose BASE sudoers with exact helper permissions derived from CONFIG."
+  (unless (file-like? base)
+    (error "Moonraker base sudoers must be file-like" base))
+  (let* ((config (validate-moonraker-configuration config))
+         (policy (moonraker-shepherd-policy config))
+         (helper (file-append moonraker-provider-shepherd "/bin/moonraker-shepherd"))
+         (commands (append '("capabilities" "status")
+                           (append-map
+                            (lambda (entry)
+                              (map (lambda (action)
+                                     (string-append (symbol->string action)
+                                                    " " (car entry)))
+                                   (cdr entry)))
+                            (moonraker-configuration-managed-services config))
+                           (map symbol->string
+                                (moonraker-configuration-power-actions config))))
+         (rules (apply mixed-text-file "moonraker-sudoers-rules"
+                       (append-map (lambda (command)
+                                     (list "klipper ALL=(root) NOPASSWD: NOSETENV: "
+                                           helper " " policy " " command "\n"))
+                                   commands))))
+    ;; Preserve the host's own file, including relative includes. The operating
+    ;; system's sudoers-file builder validates this composition with visudo.
+    (mixed-text-file "sudoers" "@include " base "\n@include " rules "\n")))
 
 (define (moonraker-activation config)
   (let* ((config (validate-moonraker-configuration config))
@@ -80,13 +197,13 @@
      (shepherd-service
       (documentation "Run the Moonraker API server for Klipper.")
       (provision '(moonraker))
-      (requirement (append '(user-processes networking klipper)
+      (requirement (append '(user-processes networking)
                            (moonraker-configuration-shepherd-requirement config)))
       (start #~(make-forkexec-constructor
                 (list #$(file-append (moonraker-configuration-package config)
                                     "/bin/moonraker")
                       "-d" #$data
-                      "-c" #$(moonraker-configuration-config-file config))
+                      "-c" #$(moonraker-config-file config))
                 #:user "klipper" #:group "klipper"
                 #:directory #$data
                 #:environment-variables

@@ -1,5 +1,5 @@
 (use-modules (gnu) (gnu services) (gnu services shepherd) (gnu services networking)
-             (guix build utils) (guix gexp) (guix monads) (guix store)
+             (guix build utils) (guix derivations) (guix gexp) (guix monads) (guix store)
              (ice-9 textual-ports)
              (spartan build moonraker) (spartan services klipper)
              (spartan services moonraker) (srfi srfi-1) (srfi srfi-64))
@@ -13,6 +13,14 @@
   (call-with-output-file file (lambda (port) (display text port))))
 (define (read-text file)
   (call-with-input-file file get-string-all))
+(define (realize file)
+  (with-store store
+    (let ((drv (run-with-store store
+                 (gexp->derivation "moonraker-test-reference"
+                   #~(call-with-output-file #$output
+                       (lambda (port) (display #$file port)))))))
+      (build-derivations store (list drv))
+      (read-text (derivation->output-path drv)))))
 
 ;; Activation order must not matter: the config link can initially dangle.
 (initialize-moonraker-state data state (getuid) (getgid))
@@ -57,11 +65,11 @@
 (define services (shepherd default))
 (test-equal "one foreground Moonraker process" '((moonraker))
   (map shepherd-service-provision services))
-(test-equal "Moonraker starts after Klipper and networking"
-  '(user-processes networking klipper)
+(test-equal "Moonraker starts independently of Klipper"
+  '(user-processes networking)
   (shepherd-service-requirement (car services)))
 (test-equal "consumer can add prerequisite services"
-  '(user-processes networking klipper sops-secrets)
+  '(user-processes networking sops-secrets)
   (shepherd-service-requirement
    (car (shepherd (moonraker-configuration
                     (shepherd-requirement '(sops-secrets)))))))
@@ -71,11 +79,11 @@
          (member "/var/lib/moonraker" (cadr form))
          (member '(list "HOME=/var/lib/moonraker") form))))
 (define custom-file "/etc/moonraker/custom.conf")
-(test-assert "custom configuration is passed directly without a writable copy"
-  (let ((start (shepherd-service-start
-                (car (shepherd (moonraker-configuration
-                                 (config-file custom-file)))))))
-    (member custom-file (cadr (gexp->approximate-sexp start)))))
+(test-assert "runtime configuration is included from its original location"
+  (string-contains
+   (read-text (realize (moonraker-config-file
+                       (moonraker-configuration (config-file custom-file)))))
+   (string-append "[include " custom-file "]")))
 (test-equal "normalized data directory is used at startup" "/srv/moonraker"
   (let* ((config (moonraker-configuration
                   (data-directory "//srv//moonraker///")))
@@ -97,12 +105,59 @@
   (shepherd (moonraker-configuration (config-file "moonraker.conf"))))
 (test-assert "runtime configuration path need not exist on the build host"
   (shepherd (moonraker-configuration (config-file "/run/secrets/moonraker.conf"))))
-(test-assert "default uses Shepherd-compatible declarative configuration"
-  (let ((text (read-text (local-file-absolute-file-name %moonraker-default-config))))
-    (and (string-contains text "provider: none")
+(test-assert "generated configuration selects Shepherd with canonical policy and helper"
+  (let ((text (read-text (realize (moonraker-config-file default)))))
+    (and (string-contains text "provider: shepherd")
          (string-contains text "validate_service: False")
          (string-contains text "validate_config: False")
+         (string-contains text (string-append "shepherd_policy: "
+                                             (realize (moonraker-shepherd-policy default))))
+         (string-contains text "-moonraker-provider-shepherd-0.1.0/bin/moonraker-shepherd")
          (not (string-contains text "[update_manager")))))
+(define restricted
+  (moonraker-configuration
+   (managed-services '(("klipper" start stop restart) ("moonraker" restart) ("camera")))
+   (power-actions '())))
+(test-equal "policy carries status-only services and independently disabled power"
+  '((version . 1) (socket . "/var/run/shepherd/socket") (moonraker-service . "moonraker")
+    (services . (("klipper" start stop restart) ("moonraker" restart) ("camera"))) (power))
+  (call-with-input-file (realize (moonraker-shepherd-policy restricted)) read))
+(define host-sudoers (plain-file "host-sudoers" "root ALL=(ALL) ALL\n%operators ALL=(ALL) ALL\n"))
+(define combined-sudoers (realize (moonraker-sudoers-file restricted host-sudoers)))
+(define includes
+  (map (lambda (line) (substring line (string-length "@include ")))
+       (remove string-null? (string-split (read-text combined-sudoers) #\newline))))
+(test-equal "sudoers preserves the host's original specification via include"
+  (realize host-sudoers) (car includes))
+(test-equal "sudoers grants exactly the policy's commands, including status diagnostics"
+  '("capabilities" "status" "start klipper" "stop klipper" "restart klipper" "restart moonraker")
+  (let ((prefix (string-append
+                 "klipper ALL=(root) NOPASSWD: NOSETENV: "
+                 (realize (file-append (@ (spartan packages moonraker-provider-shepherd)
+                                         moonraker-provider-shepherd)
+                                      "/bin/moonraker-shepherd"))
+                 " " (realize (moonraker-shepherd-policy restricted)) " ")))
+    (map (lambda (line)
+           (and (string-prefix? prefix line) (substring line (string-length prefix))))
+         (remove string-null? (string-split (read-text (cadr includes)) #\newline)))))
+(test-assert "composed sudoers passes Guix's recursive visudo check"
+  (zero? (system* (realize (file-append (@ (gnu packages admin) sudo) "/sbin/visudo"))
+                  "--check" "--file" combined-sudoers)))
+(for-each
+ (lambda (services)
+   (test-error (format #f "reject unsafe managed services ~s" services) #t
+     (moonraker-sudoers-file (moonraker-configuration (managed-services services)))))
+ '((("moonraker" stop)) (("moonraker" restart) ("root" restart))
+   (("moonraker" restart) ("x *" start)) (("moonraker" restart) ("x" bogus))
+   (("moonraker" restart) ("x" start start)) (("moonraker" restart) ("moonraker" restart))
+   (("klipper" start))))
+(for-each
+ (lambda (actions)
+   (test-error (format #f "reject invalid power permissions ~s" actions) #t
+     (moonraker-shepherd-policy (moonraker-configuration (power-actions actions)))))
+ '((poweroff poweroff) (eval) #f))
+(test-error "reject include glob patterns in runtime configuration paths" #t
+  (moonraker-config-file (moonraker-configuration (config-file "/etc/*.conf"))))
 (test-assert "activation and its build helper lower to a derivation"
   (with-store store
     (run-with-store store
@@ -123,6 +178,7 @@
                                    (device "/dev/sda1") (mount-point "/")
                                    (type "ext4"))
                                  %base-file-systems))
+              (sudoers-file (moonraker-sudoers-file default host-sudoers))
               (services (append
                          (list (service klipper-service-type
                                         (klipper-configuration
@@ -136,6 +192,25 @@
                                     #:target-type shepherd-root-service-type)))))
     (assert-valid-graph services)
     (any (lambda (item) (memq 'moonraker (shepherd-service-provision item))) services)))
+
+(define runtime-directory (string-append temporary "/runtime"))
+(mkdir runtime-directory #o700)
+(define runtime-config
+  (moonraker-configuration
+   (config-file (string-append runtime-directory "/application.conf"))
+   (shepherd-socket (string-append runtime-directory "/socket"))
+   (power-actions '())))
+(test-assert "installed Moonraker and helper manage private Shepherd using generated configuration"
+  (zero? (system*
+          (realize (file-append (@ (gnu packages python) python) "/bin/python3"))
+          (string-append (dirname (current-filename)) "/moonraker-shepherd-runtime.py")
+          runtime-directory
+          (realize (@ (spartan packages moonraker) moonraker))
+          (realize (@ (spartan packages moonraker-provider-shepherd) moonraker-provider-shepherd))
+          (realize (@ (gnu packages admin) shepherd))
+          (realize (moonraker-config-file runtime-config))
+          (realize (moonraker-shepherd-policy runtime-config))
+          (realize (file-append (@ (gnu packages base) coreutils) "/bin/sleep")))))
 
 (delete-file-recursively temporary)
 (test-end "moonraker")

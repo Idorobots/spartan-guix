@@ -82,32 +82,60 @@ consult the board and Klipper documentation.
 
 =(spartan packages moonraker)= provides Moonraker 0.11.0 and its =moonraker=
 command, including the Python dependencies, upload parser, G-code metadata
-processor and system-information tools.  It connects to Klippy over a Unix
-socket; the package can be installed independently of Klipper.
+processor and system-information tools.  It includes the released Shepherd
+provider and applies its Moonraker 0.11.0 compatibility patch before Python
+byte-compilation.  It connects to Klippy over a Unix socket; the package can be
+installed independently of Klipper.
 
 =(spartan services moonraker)= provides =moonraker-service-type= and
-=moonraker-configuration=.  Declare both services in the consuming host's
-=services= list, alongside its networking service:
+=moonraker-configuration=.  Use the same configuration for the service and its
+sudo permissions.  For example, this Guix System declaration uses an existing
+=printer.cfg= alongside the system file; adapt its boot device to the host:
 
 #+begin_src scheme
-(use-modules (gnu services) (guix gexp)
+(use-modules (gnu) (gnu services networking)
              (spartan services klipper) (spartan services moonraker))
 
-(service klipper-service-type
-         (klipper-configuration
-          (config-file (local-file "printer.cfg"))))
+(define moonraker-config (moonraker-configuration))
 
-(service moonraker-service-type)
+(operating-system
+ (host-name "printer")
+ (timezone "Etc/UTC")
+ (locale "en_US.utf8")
+ (bootloader (bootloader-configuration
+              (bootloader grub-bootloader)
+              (targets '("/dev/sda"))))
+ (file-systems (cons (file-system
+                      (device "/dev/sda1") (mount-point "/") (type "ext4"))
+                    %base-file-systems))
+ (sudoers-file (moonraker-sudoers-file moonraker-config %sudoers-specification))
+ (services (append
+            (list (service klipper-service-type
+                           (klipper-configuration
+                            (config-file (local-file "printer.cfg"))))
+                  (service moonraker-service-type moonraker-config)
+                  (service dhcpcd-service-type))
+            %base-services)))
 #+end_src
 
-Moonraker starts after =klipper= and =networking= and runs under the existing
-=klipper= account.  Sharing that identity permits access to Klippy's socket,
-printer configuration and G-code files without changing Klipper's permissions.
-The Moonraker service requires a separately configured =klipper-service-type=;
-it does not invent a printer configuration or automatically add Klipper.
+Moonraker starts after =networking= and runs under the =klipper= account
+provided by the separately configured =klipper-service-type=.  Sharing that
+identity permits access to Klippy's socket, printer configuration and G-code
+files.  Both daemons start independently; Moonraker reconnects when Klippy is
+available.  Stopping or restarting Klipper leaves the API running.  Do not add
+=klipper= to Moonraker's =shepherd-requirement=.
 
-The exported =%moonraker-default-config= is installed as an immutable store file
-and passed directly to Moonraker.  It listens on =0.0.0.0:7125=, connects to
+=moonraker-sudoers-file= includes the supplied host sudoers file and adds exact
+=NOPASSWD: NOSETENV:= helper commands for the =klipper= account.  Pass the host's
+existing custom sudoers file instead of =%sudoers-specification= if it has one;
+the optional second argument defaults to Guix's specification.  Guix validates
+the composed file with =visudo= during the system build.  The service declaration
+alone does not install these permissions: Guix's default sudoers has no
+=sudoers.d= include.
+
+The exported =%moonraker-default-config= is the base application configuration.
+The service generates an immutable wrapper that includes it and supplies the
+Shepherd machine settings.  It listens on =0.0.0.0:7125=, connects to
 =/run/klipper/klippy.sock=, allows CORS for =*.local= and =localhost= (including
 explicit ports), and trusts IPv4 private, loopback and link-local networks and
 IPv6 loopback, link-local and unique-local networks.  Trusted clients have full
@@ -116,7 +144,7 @@ Software updates remain managed by Guix: there are no =update_manager= sections.
 The default also enables OctoPrint API compatibility and leaves object
 preprocessing disabled, as in the Mainsail manual setup guide.
 
-Override the whole configuration with =config-file=:
+Override the application configuration with =config-file=:
 
 #+begin_src scheme
 (service moonraker-service-type
@@ -125,19 +153,18 @@ Override the whole configuration with =config-file=:
 #+end_src
 
 Unlike Klipper's printer seed, this file is declarative: changes take effect
-after reconfiguration and restart.  It is not copied to writable state and is
-not editable through the API.  =config-file= also accepts an absolute runtime
-path; the consumer must provision that file and any includes before startup.
+after reconfiguration and restart.  It is included from its original location
+without a writable copy.  Relative includes resolve beside that file.  For a
+store-backed configuration tree, use =file-append= on a recursive =local-file=
+so those included files are also present in the store.  =config-file= also
+accepts an absolute runtime path without glob characters; the consumer must
+provision that file and any includes before startup.
 =shepherd-requirement= adds prerequisites, for example ='(sops-secrets)= for a
-runtime file supplied by that service.  Preserve these settings in custom
-configurations for Shepherd and immutable configuration:
-
-#+begin_src conf
-[machine]
-provider: none
-validate_service: False
-validate_config: False
-#+end_src
+runtime file supplied by that service.  The generated final =[machine]= section
+selects =provider: shepherd=, disables the install validators, and sets the
+absolute helper, canonical policy, privileged sudo and timeout paths/settings.
+These settings override matching options in the application file.  Leave the
+update manager disabled in custom configurations too.
 
 Moonraker's =data-directory= defaults to =/var/lib/moonraker=.  Activation
 creates its logs, G-code, database and communications directories, owned by
@@ -163,8 +190,54 @@ path: /var/lib/moonraker/gcodes
 [pause_resume]
 #+end_src
 
-Shepherd supervises both processes.  Moonraker uses =provider: none=; UI controls
-for OS services, reboot and shutdown are not configured here.
+The service generates its immutable helper policy and sudo commands from the
+same =moonraker-configuration= fields:
+
+- =managed-services= defaults to ='(("klipper" start stop restart) ("moonraker" restart))=.
+  It is the complete visible service/action allowlist.  Add registered Shepherd
+  services explicitly; an entry such as =("camera")= gives status-only access.
+  Keep the ="moonraker"= entry; it may permit only =restart= or no actions.
+- =power-actions= defaults to ='(poweroff reboot)=.  Use ='()= to disable host
+  power operations.  =halt= is also supported; set =shutdown_action: halt= in
+  the application file when using it instead of =poweroff=.
+- =shepherd-socket= defaults to =/var/run/shepherd/socket=.
+- =shepherd-timeout= defaults to 60 seconds and must be finite and positive.
+  An already submitted Shepherd action may finish after a client timeout.
+
+For example, to expose an additional camera service and disable host power:
+
+#+begin_src scheme
+(define moonraker-config
+  (moonraker-configuration
+   (managed-services '(("klipper" start stop restart)
+                       ("moonraker" restart)
+                       ("camera" restart)))
+   (power-actions '())))
+#+end_src
+
+Use this object for both the service and =moonraker-sudoers-file=.  Authorized
+clients, including trusted-network clients, can invoke the permitted service
+and power controls.  Moonraker itself remains unprivileged.  The helper limits
+requests to the immutable policy; =moonraker.asvc= cannot add permissions.
+It also rejects operations whose Shepherd dependencies would stop Moonraker.
+
+=(spartan packages moonraker-provider-shepherd)= provides the separately released,
+MIT-licensed Shepherd provider, Guile management helper, and Moonraker 0.11.0
+compatibility patch.  Its source is pinned to the published upstream =v0.1.0=
+Git tag and verified tree hash.  Moonraker propagates this package into its
+Python environment.
+
+The installed helper is =bin/moonraker-shepherd=; the patch is
+=share/moonraker-provider-shepherd/patches/moonraker-0.11.0-shepherd.patch=.
+The exported =moonraker-config-file= and =moonraker-shepherd-policy= constructors
+return the generated immutable files for a configuration.  The service uses
+their canonical store paths directly rather than profile or =/etc= symlinks.
+
+Run =guix repl -L modules tests/moonraker.scm= to check activation, configuration,
+policy and sudoers composition and installed-package service control under a
+private Shepherd.  That test uses an unprivileged sudo adapter and an empty
+power policy.  =python3 tests/moonraker-runtime.py MOONRAKER-PACKAGE KLIPPER-PACKAGE=
+separately checks uploads, metadata, persistence and the Klippy connection.
 
 ** Network UPS Tools
 
