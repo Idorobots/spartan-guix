@@ -78,6 +78,94 @@ Workspace setup does not build or flash firmware.  Stop Klippy with
 afterward.  Some boards require a manual SD-card flash or bootloader entry;
 consult the board and Klipper documentation.
 
+** Moonraker
+
+=(spartan packages moonraker)= provides Moonraker 0.11.0 and its =moonraker=
+command, including the Python dependencies, upload parser, G-code metadata
+processor and system-information tools.  It connects to Klippy over a Unix
+socket; the package can be installed independently of Klipper.
+
+=(spartan services moonraker)= provides =moonraker-service-type= and
+=moonraker-configuration=.  Declare both services in the consuming host's
+=services= list, alongside its networking service:
+
+#+begin_src scheme
+(use-modules (gnu services) (guix gexp)
+             (spartan services klipper) (spartan services moonraker))
+
+(service klipper-service-type
+         (klipper-configuration
+          (config-file (local-file "printer.cfg"))))
+
+(service moonraker-service-type)
+#+end_src
+
+Moonraker starts after =klipper= and =networking= and runs under the existing
+=klipper= account.  Sharing that identity permits access to Klippy's socket,
+printer configuration and G-code files without changing Klipper's permissions.
+The Moonraker service requires a separately configured =klipper-service-type=;
+it does not invent a printer configuration or automatically add Klipper.
+
+The exported =%moonraker-default-config= is installed as an immutable store file
+and passed directly to Moonraker.  It listens on =0.0.0.0:7125=, connects to
+=/run/klipper/klippy.sock=, allows CORS for =*.local= and =localhost= (including
+explicit ports), and trusts IPv4 private, loopback and link-local networks and
+IPv6 loopback, link-local and unique-local networks.  Trusted clients have full
+API access.  Forwarded client-IP headers are disabled for direct connections.
+Software updates remain managed by Guix: there are no =update_manager= sections.
+The default also enables OctoPrint API compatibility and leaves object
+preprocessing disabled, as in the Mainsail manual setup guide.
+
+Override the whole configuration with =config-file=:
+
+#+begin_src scheme
+(service moonraker-service-type
+         (moonraker-configuration
+          (config-file (local-file "moonraker.conf"))))
+#+end_src
+
+Unlike Klipper's printer seed, this file is declarative: changes take effect
+after reconfiguration and restart.  It is not copied to writable state and is
+not editable through the API.  =config-file= also accepts an absolute runtime
+path; the consumer must provision that file and any includes before startup.
+=shepherd-requirement= adds prerequisites, for example ='(sops-secrets)= for a
+runtime file supplied by that service.  Preserve these settings in custom
+configurations for Shepherd and immutable configuration:
+
+#+begin_src conf
+[machine]
+provider: none
+validate_service: False
+validate_config: False
+#+end_src
+
+Moonraker's =data-directory= defaults to =/var/lib/moonraker=.  Activation
+creates its logs, G-code, database and communications directories, owned by
+=klipper= with mode =0750=.  Its =config= directory links to
+=klipper-state-directory=, default =/var/lib/klipper=, making the writable
+=printer.cfg= and included files available to the file API.  Reconfiguration
+preserves uploads, database and printer calibration.  An existing unmanaged
+=config= directory is not replaced.  Directory overrides must be absolute,
+outside the store, and non-overlapping; repeated and trailing slashes are
+normalized.  Match =klipper-state-directory= to any Klipper =state-directory=
+override, and adjust =klippy_uds_address= in a custom configuration if changing
+Klipper's =run-directory=.
+
+For printing uploaded files, include the following in the printer configuration
+(adjust the path when changing =data-directory=):
+
+#+begin_src conf
+[virtual_sdcard]
+path: /var/lib/moonraker/gcodes
+
+[display_status]
+
+[pause_resume]
+#+end_src
+
+Shepherd supervises both processes.  Moonraker uses =provider: none=; UI controls
+for OS services, reboot and shutdown are not configured here.
+
 ** Network UPS Tools
 
 =(spartan packages nut)= exports =nut=, Network UPS Tools 2.8.5, with USB,
