@@ -239,6 +239,97 @@ private Shepherd.  That test uses an unprivileged sudo adapter and an empty
 power policy.  =python3 tests/moonraker-runtime.py MOONRAKER-PACKAGE KLIPPER-PACKAGE=
 separately checks uploads, metadata, persistence and the Klippy connection.
 
+** Mainsail
+
+=(spartan packages mainsail)= provides Mainsail 2.19.0 from the official GitHub
+release =mainsail.zip=, pinned to its versioned URL and SHA-256.  Build it with:
+
+#+begin_src sh
+guix build -L modules mainsail
+#+end_src
+
+The complete frontend is installed in =share/mainsail=, including =config.json=,
+the service worker, version metadata, fonts and images.  The matching license
+is in =share/doc/mainsail-2.19.0/LICENSE=.  These are architecture-independent
+static files suitable for the RPi3: JavaScript runs in the client's browser,
+and the printer host needs no Node.js runtime.  Updates are made through Guix.
+
+=(spartan services mainsail)= exports =%mainsail-nginx-configuration=, a normal
+Guix =nginx-configuration= following the upstream
+[[https://docs.mainsail.xyz/setup/manual/][manual installation guide]].  Add this to the host's =services= alongside its
+Klipper, Moonraker and networking declarations:
+
+#+begin_src scheme
+(use-modules (gnu services) (gnu services web) (spartan services mainsail))
+
+(service nginx-service-type %mainsail-nginx-configuration)
+#+end_src
+
+The default configuration:
+
+- Listens on IPv4 port 80 as the default server, with =server_name _= and the
+  immutable Mainsail package as its document root.
+- Uses the single-page application fallback =try_files $uri $uri/ /index.html=.
+  =index.html=, =config.json= and =sw.js= receive no-store/no-cache headers.
+- Proxies =/printer/=, =/api/=, =/access/=, =/machine/= and =/server/= to
+  Moonraker at =127.0.0.1:7125=, retaining the original URI and query string.
+- Proxies =/websocket= using HTTP/1.1, the Upgrade/Connection map and the guide's
+  86400-second read timeout.  Host and client-IP forwarding headers are set as
+  in the guide; Moonraker's own authorization configuration still applies.
+- Removes nginx's upload-size limit and disables request buffering, leaving
+  Moonraker's =max_upload_size= setting authoritative.
+- Proxies =/webcam/= through =/webcam4/= to =127.0.0.1:8080= through =8083=,
+  stripping the webcam prefix and disabling response buffering for streams.
+- Enables the guide's gzip settings at compression level 4.  Logs, runtime
+  directories and log rotation use the normal Guix nginx service configuration.
+
+Nginx starts independently of the printer daemons and camera backends.  The
+frontend remains available while they restart; backend requests return a proxy
+error until their target is available.  Camera software and its devices are
+configured separately.  The default HTTP setup serves Mainsail at the site's
+root, with API and WebSocket requests on the same origin.
+
+The =mainsail-nginx-configuration= constructor accepts these keyword arguments:
+
+- =#:package=: a frontend package providing =share/mainsail=; defaults to =mainsail=.
+- =#:listen= and =#:server-name=: nginx service lists, defaulting to
+  ='("80 default_server")= and ='("_")=.  Include ="[::]:80 default_server"= in
+  =#:listen= when enabling an IPv6 listener.
+- =#:moonraker-address=: an nginx upstream server address, default
+  ="127.0.0.1:7125"=.
+- =#:webcams=: an ordered list of upstream server addresses.  Use ='()= to omit
+  webcam routes, or list only the cameras being provisioned.
+- =#:gzip?=: defaults to =#t=; set =#f= to disable compression on smaller hosts.
+- =#:config-file=: an optional file-like =config.json=, served with an exact
+  nginx alias instead of changing files in the package.  The default =#f=
+  serves the release's original configuration.
+
+For example, to set a hostname, expose one camera and supply UI defaults:
+
+#+begin_src scheme
+(use-modules (gnu services) (gnu services web) (guix gexp)
+             (spartan services mainsail))
+
+(service nginx-service-type
+         (mainsail-nginx-configuration
+          #:server-name '("printer.local")
+          #:webcams '("127.0.0.1:8080")
+          #:config-file (plain-file "mainsail-config.json"
+                                   "{\"defaultLocale\":\"en\",\"defaultMode\":\"dark\"}\n")))
+#+end_src
+
+The result can be inherited with =nginx-configuration= to customize nginx's
+global settings.  It supplies its own server/upstream blocks and WebSocket
+map; preserve those fields when combining it with other sites.  A working
+deployment also needs the Moonraker and Klipper configurations described above,
+including the printer's =virtual_sdcard=, =display_status= and =pause_resume=.
+
+Run =guix repl -L modules tests/mainsail.scm= to build the package, check both
+default and customized configurations with =nginx -t=, and exercise static
+assets, SPA fallback, compression, configuration overrides, API requests,
+uploads, webcam routes and bidirectional WebSocket forwarding.  The test runs
+nginx unprivileged on loopback with a mock backend and needs no printer hardware.
+
 ** Network UPS Tools
 
 =(spartan packages nut)= exports =nut=, Network UPS Tools 2.8.5, with USB,
