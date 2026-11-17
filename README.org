@@ -1,27 +1,96 @@
 * Spartan Guix
 
-A GNU Guix channel for reusable packages, services and system images.
+A GNU Guix channel for reusable packages, services and Raspberry Pi images.
 
-** Using the channel
+With the channel configured in =channels.scm= and =guix pull= completed, install
+packages normally:
 
-Add this entry alongside Guix in the consumer's channel configuration:
+#+begin_src sh
+guix install klipper moonraker mainsail nut
+#+end_src
+
+Import the corresponding modules in your Guix System configuration to use the
+services.
+
+** Inventory
+
+*** Application packages
+
+| Module | Package | Purpose |
+|--------+---------+---------|
+| =(spartan packages klipper)= | =klipper= | Klipper host software, MCU sources and flashing tools. |
+| =(spartan packages moonraker)= | =moonraker= | HTTP/WebSocket API for Klipper, with Shepherd integration. |
+| =(spartan packages moonraker-provider-shepherd)= | =moonraker-provider-shepherd= | MIT-licensed provider, policy-limited Guile helper and Moonraker compatibility patch. |
+| =(spartan packages mainsail)= | =mainsail= | Official pre-built Mainsail web interface. |
+| =(spartan packages nut)= | =nut= | UPS drivers, =upsd= and command-line clients. |
+
+=(spartan packages moonraker)= also provides =python-streaming-form-data=
+(incremental uploads), =python-preprocess-cancellation= (G-code object markers)
+and =python-periphery= (Linux peripheral I/O).
+
+*** Firmware
+
+=(spartan packages firmware)= provides:
+
+- =linux-firmware-uncompressed=: Nonguix's firmware collection in uncompressed
+  form, including Pi 3 Wi-Fi firmware, board configuration and regulatory data.
+  Suitable for kernels without firmware compression support.
+- =rpi3-bluetooth-firmware=: version-pinned Debian BCM43430A1 firmware and its
+  Cypress license, with the =BCM43430A1.raspberrypi,3-model-b.hcd= alias.
+
+Both install under =lib/firmware/= and are included in the Pi 3 OS.
+
+*** Compatibility packages
+
+These variants provide cross-build recipe fixes. Select the exported package
+in place of its upstream counterpart.
+
+| Module | Packages | Purpose |
+|--------+----------+---------|
+| =(spartan packages admin)= | =htop/cross-fixed= | Process viewer with sensor dependencies. |
+| =(spartan packages avahi)= | =guile-avahi/without-daemon-tests= | Guile Avahi bindings for builds without a running daemon. |
+| =(spartan packages compression)= | =libcbor/cross-fixed= | CBOR encoding and decoding library. |
+| =(spartan packages dns)= | =isc-bind/cross-fixed= | BIND DNS server and utilities. |
+| =(spartan packages groff)= | =groff/cross-fixed=, =groff-minimal/cross-fixed= | Full and minimal document formatters. |
+| =(spartan packages gtk)= | =pango/cross-fixed= | Text rendering for C consumers; omits introspection metadata. |
+| =(spartan packages linux)= | =alsa-lib/cross-fixed=, =alsa-utils/cross-fixed= | ALSA audio library, utilities and udev rules. |
+| =(spartan packages linux)= | =lm-sensors/cross-fixed= | Hardware sensor tools and libraries. |
+| =(spartan packages maths)= | =gnuplot/cross-fixed= | Plotting and graph generation. |
+| =(spartan packages ntp)= | =ntp/cross-fixed=, =openntpd/cross-fixed= | Clock synchronization; reference NTP retains its HTTPS leap-file helper. |
+| =(spartan packages perl)= | =perl/cross-fixed= | Perl interpreter and headers for XS extensions. |
+| =(spartan packages rrdtool)= | =rrdtool/cross-fixed= | Time-series storage and graphs, including Perl bindings. |
+| =(spartan packages tls)= | =perl-net-ssleay/cross-fixed= | Perl OpenSSL bindings. |
+
+*** Services and images
+
+| Module | Entry point | Purpose |
+|--------+-------------+---------|
+| =(spartan services klipper)= | =klipper-service-type= | Klippy supervision and persistent printer configuration. |
+| =(spartan services moonraker)= | =moonraker-service-type= | Declarative Moonraker configuration and persistent API state. |
+| =(spartan services mainsail)= | =%mainsail-nginx-configuration= | Ready-to-use configuration for Guix's =nginx-service-type=. |
+| =(spartan services nut)= | =upsd-service-type= | Supervised UPS drivers, server configuration and USB permissions. |
+| =(spartan services file-systems)= | =resize-file-system-service-type= | Grow a partition and filesystem at boot. |
+| =(spartan bootloader raspberrypi)= | =u-boot-rpi-arm64-bootloader= | Pi firmware → U-Boot → Extlinux boot chain. |
+| =(gnu system images raspberrypi)= | =rpi3-barebones-os=, =rpi3-barebones-raw-image= | Minimal ARM64 Pi 3 system and SD-card image. |
+
+For filesystem growth, reference a filesystem already declared in the host:
 
 #+begin_src scheme
-(channel
- (name 'spartan-guix)
- (url "https://github.com/Idorobots/spartan-guix")
- (commit "REPLACE-WITH-PUBLISHED-COMMIT"))
+(use-modules (gnu services) (spartan services file-systems))
+
+(service resize-file-system-service-type
+         (resize-file-system-configuration
+          (file-system data-file-system)))
 #+end_src
+
+Supports ext2/3/4, Btrfs and bcachefs on plain partitions with adjacent free
+space. Each instance runs after its filesystem is mounted; LVM and multi-device
+filesystems are outside its scope.
 
 ** Klipper
 
-=(spartan packages klipper)= provides Klipper 0.13.0's host software, MCU
-firmware source and upstream flashing tools.  The C helpers are compiled when
-the package is built.  The installed source contains the host modules, MCU
-sources, bundled libraries, configurations and supporting scripts; upstream
-documentation, tests and CI metadata are omitted from the firmware workspace.
-=(spartan services klipper)= provides a generic
-Shepherd service; the consumer supplies a printer-specific initial config:
+Klipper 0.13.0 includes compiled host helpers, MCU sources, configurations and
+flashing tools. Supply a printer-specific configuration to the Shepherd service:
 
 #+begin_src scheme
 (use-modules (gnu services) (guix gexp) (spartan services klipper))
@@ -32,31 +101,24 @@ Shepherd service; the consumer supplies a printer-specific initial config:
           (firmware-workspace? #t)))
 #+end_src
 
-On first activation the seed is copied to =/var/lib/klipper/printer.cfg=,
-owned by the =klipper= account.  Subsequent activations preserve that file,
-including changes made by Klipper's =SAVE_CONFIG=.  Changes to the declarative
-seed do not overwrite the existing runtime file.  Capture calibration changes
-in the Guix source yourself.  Klipper resolves includes relative to the runtime
-file, so supply additional included files in that directory yourself.  The
-=state-directory= and =run-directory= fields override the defaults; Klippy
-creates its API socket at =/run/klipper/klippy.sock= and its G-code PTY at
-=/run/klipper/printer=.  The service runs as =klipper= with the =dialout=
-supplementary group; arrange device permissions appropriate to the board.
-Directory overrides must be distinct absolute service directories outside the
-Guix store, without =.= or =..= components.  Repeated and trailing slashes are
-normalized before validation and use.
+The seed is copied once to =/var/lib/klipper/printer.cfg=. Reconfiguration
+preserves it, including =SAVE_CONFIG= calibration; update the declarative seed
+yourself when retaining those changes. Provision included files beside the
+runtime configuration. Klippy runs as =klipper= with =dialout= access; arrange
+the board's device permissions on the host.
 
-The optional =firmware-workspace?= flag (default =#f=) prepares a writable copy
-of the package's firmware source and flashing tools at
-=/run/klipper/firmware= during system activation.  It follows =run-directory=
-when overridden and is owned by =klipper=.  Reconfiguration preserves an
-existing workspace, including =.config= and build outputs; rebooting clears it
-and prepares a fresh copy from the currently installed package.  Save any board
-configuration and firmware you want to keep outside =/run=.  Disabling the flag
-leaves an existing workspace in place until reboot.
+- =state-directory=: =/var/lib/klipper=; holds the configuration and log.
+- =run-directory=: =/run/klipper=; holds =klippy.sock= and the =printer= PTY.
+- =firmware-workspace?=: default =#f=. Enables a writable source/tools copy at
+  =/run/klipper/firmware=, following =run-directory= overrides. It survives
+  reconfiguration, including =.config= and build outputs, but is refreshed after
+  reboot. Save wanted files outside =/run=; disabling the flag leaves an existing
+  workspace until reboot.
 
-Use an administrative shell to access the workspace, and choose the board's
-configuration and cross compiler as documented by Klipper:
+Directory overrides must be distinct absolute service paths outside the store,
+without dot components; repeated and trailing slashes are normalized.
+
+With =make=, the board's compiler and flash utility installed:
 
 #+begin_src sh
 sudo -i
@@ -65,121 +127,83 @@ make menuconfig
 make
 #+end_src
 
-Install =make=, the board-specific compiler and flash utility separately (for
-example, an ARM or AVR cross compiler and =dfu-util= or =avrdude=).
-The firmware Makefile and SD-card script use the packaged Python interpreter
-and dependencies automatically.
-The workspace's =scripts/flash-sdcard.sh= uses its local =out/klipper.bin= and
-=out/klipper.dict= by default.  The package also exposes
-=klipper-flash-sdcard= for supported boards already running Klipper; use =-l=
-to list them and =-f= and =-d= to select firmware and its matching dictionary.
-Workspace setup does not build or flash firmware.  Stop Klippy with
-=herd stop klipper= before flashing and restart it with =herd start klipper=
-afterward.  Some boards require a manual SD-card flash or bootloader entry;
-consult the board and Klipper documentation.
+The tools use the packaged Python environment. =scripts/flash-sdcard.sh= defaults
+to the workspace's =out/klipper.bin= and =out/klipper.dict=; the installed
+=klipper-flash-sdcard= command accepts =-l= to list boards and =-f= / =-d= to select
+firmware/dictionary files. Workspace preparation does not build or flash firmware.
+Stop Klippy with =herd stop klipper= before flashing and restart it with
+=herd start klipper= afterward. Follow the board's bootloader/SD-card procedure.
 
 ** Moonraker
 
-=(spartan packages moonraker)= provides Moonraker 0.11.0 and its =moonraker=
-command, including the Python dependencies, upload parser, G-code metadata
-processor and system-information tools.  It includes the released Shepherd
-provider and applies its Moonraker 0.11.0 compatibility patch before Python
-byte-compilation.  It connects to Klippy over a Unix socket; the package can be
+Moonraker 0.11.0 supplies the printer API, uploads, metadata and history. Its
+package includes Shepherd provider 0.1.0 and the compatibility patch. It can be
 installed independently of Klipper.
 
-=(spartan services moonraker)= provides =moonraker-service-type= and
-=moonraker-configuration=.  Use the same configuration for the service and its
-sudo permissions.  For example, this Guix System declaration uses an existing
-=printer.cfg= alongside the system file; adapt its boot device to the host:
+Use one configuration object for the service and its exact sudo permissions:
 
 #+begin_src scheme
-(use-modules (gnu) (gnu services networking)
-             (spartan services klipper) (spartan services moonraker))
+(use-modules (gnu services) (gnu system) (spartan services moonraker))
 
 (define moonraker-config (moonraker-configuration))
-
-(operating-system
- (host-name "printer")
- (timezone "Etc/UTC")
- (locale "en_US.utf8")
- (bootloader (bootloader-configuration
-              (bootloader grub-bootloader)
-              (targets '("/dev/sda"))))
- (file-systems (cons (file-system
-                      (device "/dev/sda1") (mount-point "/") (type "ext4"))
-                    %base-file-systems))
- (sudoers-file (moonraker-sudoers-file moonraker-config %sudoers-specification))
- (services (append
-            (list (service klipper-service-type
-                           (klipper-configuration
-                            (config-file (local-file "printer.cfg"))))
-                  (service moonraker-service-type moonraker-config)
-                  (service dhcpcd-service-type))
-            %base-services)))
+(define printer-api (service moonraker-service-type moonraker-config))
+(define printer-sudoers
+  (moonraker-sudoers-file moonraker-config %sudoers-specification))
 #+end_src
 
-Moonraker starts after =networking= and runs under the =klipper= account
-provided by the separately configured =klipper-service-type=.  Sharing that
-identity permits access to Klippy's socket, printer configuration and G-code
-files.  Both daemons start independently; Moonraker reconnects when Klippy is
-available.  Stopping or restarting Klipper leaves the API running.  Do not add
-=klipper= to Moonraker's =shepherd-requirement=.
+Add =printer-api= to the OS's =services= and set =sudoers-file= to
+=printer-sudoers=. Pass the host's existing sudoers file in place of
+=%sudoers-specification= when customized. The composer preserves it and adds
+exact =NOPASSWD: NOSETENV:= helper commands; Guix validates the result with
+=visudo=. The service alone does not install sudo permissions.
 
-=moonraker-sudoers-file= includes the supplied host sudoers file and adds exact
-=NOPASSWD: NOSETENV:= helper commands for the =klipper= account.  Pass the host's
-existing custom sudoers file instead of =%sudoers-specification= if it has one;
-the optional second argument defaults to Guix's specification.  Guix validates
-the composed file with =visudo= during the system build.  The service declaration
-alone does not install these permissions: Guix's default sudoers has no
-=sudoers.d= include.
+Declare Klipper separately: it supplies the shared =klipper= account. Moonraker
+starts after networking and reconnects to Klippy independently, so stopping
+Klipper leaves the API available. Do not add =klipper= to its
+=shepherd-requirement=.
 
-The exported =%moonraker-default-config= is the base application configuration.
-The service generates an immutable wrapper that includes it and supplies the
-Shepherd machine settings.  It listens on =0.0.0.0:7125=, connects to
-=/run/klipper/klippy.sock=, allows CORS for =*.local= and =localhost= (including
-explicit ports), and trusts IPv4 private, loopback and link-local networks and
-IPv6 loopback, link-local and unique-local networks.  Trusted clients have full
-API access.  Forwarded client-IP headers are disabled for direct connections.
-Software updates remain managed by Guix: there are no =update_manager= sections.
-The default also enables OctoPrint API compatibility and leaves object
-preprocessing disabled, as in the Mainsail manual setup guide.
+| Setting | Default / use |
+|---------+---------------|
+| =config-file= | =%moonraker-default-config=; override with a file-like object or absolute runtime path without globs. |
+| =data-directory= | =/var/lib/moonraker=; uploads, logs, database and communications, owned by =klipper= with mode =0750=. |
+| =klipper-state-directory= | =/var/lib/klipper=; linked as the API's writable =config= directory. |
+| =managed-services= | ='(("klipper" start stop restart) ("moonraker" restart))=; complete service/action allowlist. |
+| =power-actions= | ='(poweroff reboot)=; use ='()= to disable power controls. Also supports =halt=. |
+| =shepherd-socket= | =/var/run/shepherd/socket=. |
+| =shepherd-timeout= | 60 seconds; finite and positive. Submitted actions may finish after a timeout. |
+| =shepherd-requirement= | Additional prerequisites, such as ='(sops-secrets)= for runtime configuration. |
 
-Override the application configuration with =config-file=:
+The default listens on =0.0.0.0:7125= and connects to =/run/klipper/klippy.sock=.
+It allows CORS for =*.local= and =localhost=, including explicit ports, and trusts
+private, loopback and link-local networks, including IPv6 unique-local addresses.
+Trusted clients have full API access. Forwarded client-IP headers are disabled;
+OctoPrint compatibility is enabled and object preprocessing is disabled.
 
-#+begin_src scheme
-(service moonraker-service-type
-         (moonraker-configuration
-          (config-file (local-file "moonraker.conf"))))
-#+end_src
+The service includes the application file from its original location, then adds
+an immutable =[machine]= section selecting Shepherd, canonical helper/policy
+paths and disabled installation validators. These settings override matching
+application options. Relative includes remain relative to the original file;
+use a recursive =local-file= with =file-append= for a store-backed configuration
+tree. Provision runtime files before startup. Keep =update_manager= disabled.
 
-Unlike Klipper's printer seed, this file is declarative: changes take effect
-after reconfiguration and restart.  It is included from its original location
-without a writable copy.  Relative includes resolve beside that file.  For a
-store-backed configuration tree, use =file-append= on a recursive =local-file=
-so those included files are also present in the store.  =config-file= also
-accepts an absolute runtime path without glob characters; the consumer must
-provision that file and any includes before startup.
-=shepherd-requirement= adds prerequisites, for example ='(sops-secrets)= for a
-runtime file supplied by that service.  The generated final =[machine]= section
-selects =provider: shepherd=, disables the install validators, and sets the
-absolute helper, canonical policy, privileged sudo and timeout paths/settings.
-These settings override matching options in the application file.  Leave the
-update manager disabled in custom configurations too.
+Reconfiguration preserves uploads, database and calibration and does not replace
+an unmanaged =config= directory. Data and printer-state paths must be absolute,
+outside the store and non-overlapping. Match directory/socket overrides to
+Klipper's configuration.
 
-Moonraker's =data-directory= defaults to =/var/lib/moonraker=.  Activation
-creates its logs, G-code, database and communications directories, owned by
-=klipper= with mode =0750=.  Its =config= directory links to
-=klipper-state-directory=, default =/var/lib/klipper=, making the writable
-=printer.cfg= and included files available to the file API.  Reconfiguration
-preserves uploads, database and printer calibration.  An existing unmanaged
-=config= directory is not replaced.  Directory overrides must be absolute,
-outside the store, and non-overlapping; repeated and trailing slashes are
-normalized.  Match =klipper-state-directory= to any Klipper =state-directory=
-override, and adjust =klippy_uds_address= in a custom configuration if changing
-Klipper's =run-directory=.
+Additional service entries can permit selected actions or status only, e.g.
+=("camera")=. Keep the ="moonraker"= entry; it permits only =restart= or no
+actions. The immutable policy limits authorized clients' controls;
+=moonraker.asvc= cannot add rights. The helper rejects operations that would
+stop Moonraker through dependencies. For halt, permit =halt= and set
+=shutdown_action: halt= in the application file.
 
-For printing uploaded files, include the following in the printer configuration
-(adjust the path when changing =data-directory=):
+=moonraker-config-file= and =moonraker-shepherd-policy= expose the generated
+files. The provider installs =bin/moonraker-shepherd= and the patch under
+=share/moonraker-provider-shepherd/patches/=. See the
+[[https://github.com/Idorobots/moonraker-provider-shepherd][provider documentation]] for its protocol and management semantics.
+
+For printing uploaded files, include in the printer configuration:
 
 #+begin_src conf
 [virtual_sdcard]
@@ -190,74 +214,15 @@ path: /var/lib/moonraker/gcodes
 [pause_resume]
 #+end_src
 
-The service generates its immutable helper policy and sudo commands from the
-same =moonraker-configuration= fields:
-
-- =managed-services= defaults to ='(("klipper" start stop restart) ("moonraker" restart))=.
-  It is the complete visible service/action allowlist.  Add registered Shepherd
-  services explicitly; an entry such as =("camera")= gives status-only access.
-  Keep the ="moonraker"= entry; it may permit only =restart= or no actions.
-- =power-actions= defaults to ='(poweroff reboot)=.  Use ='()= to disable host
-  power operations.  =halt= is also supported; set =shutdown_action: halt= in
-  the application file when using it instead of =poweroff=.
-- =shepherd-socket= defaults to =/var/run/shepherd/socket=.
-- =shepherd-timeout= defaults to 60 seconds and must be finite and positive.
-  An already submitted Shepherd action may finish after a client timeout.
-
-For example, to expose an additional camera service and disable host power:
-
-#+begin_src scheme
-(define moonraker-config
-  (moonraker-configuration
-   (managed-services '(("klipper" start stop restart)
-                       ("moonraker" restart)
-                       ("camera" restart)))
-   (power-actions '())))
-#+end_src
-
-Use this object for both the service and =moonraker-sudoers-file=.  Authorized
-clients, including trusted-network clients, can invoke the permitted service
-and power controls.  Moonraker itself remains unprivileged.  The helper limits
-requests to the immutable policy; =moonraker.asvc= cannot add permissions.
-It also rejects operations whose Shepherd dependencies would stop Moonraker.
-
-=(spartan packages moonraker-provider-shepherd)= provides the separately released,
-MIT-licensed Shepherd provider, Guile management helper, and Moonraker 0.11.0
-compatibility patch.  Its source is pinned to the published upstream =v0.1.0=
-Git tag and verified tree hash.  Moonraker propagates this package into its
-Python environment.
-
-The installed helper is =bin/moonraker-shepherd=; the patch is
-=share/moonraker-provider-shepherd/patches/moonraker-0.11.0-shepherd.patch=.
-The exported =moonraker-config-file= and =moonraker-shepherd-policy= constructors
-return the generated immutable files for a configuration.  The service uses
-their canonical store paths directly rather than profile or =/etc= symlinks.
-
-Run =guix repl -L modules tests/moonraker.scm= to check activation, configuration,
-policy and sudoers composition and installed-package service control under a
-private Shepherd.  That test uses an unprivileged sudo adapter and an empty
-power policy.  =python3 tests/moonraker-runtime.py MOONRAKER-PACKAGE KLIPPER-PACKAGE=
-separately checks uploads, metadata, persistence and the Klippy connection.
-
 ** Mainsail
 
-=(spartan packages mainsail)= provides Mainsail 2.19.0 from the official GitHub
-release =mainsail.zip=, pinned to its versioned URL and SHA-256.  Build it with:
+Mainsail 2.19.0 packages the official GitHub release ZIP with a pinned SHA-256.
+Its static frontend is in =share/mainsail=, including =config.json=, service
+worker, fonts, images and version metadata; the license is in
+=share/doc/mainsail-2.19.0/LICENSE=. JavaScript runs in the browser, with no
+Node.js runtime needed on the printer host. Updates are managed through Guix.
 
-#+begin_src sh
-guix build -L modules mainsail
-#+end_src
-
-The complete frontend is installed in =share/mainsail=, including =config.json=,
-the service worker, version metadata, fonts and images.  The matching license
-is in =share/doc/mainsail-2.19.0/LICENSE=.  These are architecture-independent
-static files suitable for the RPi3: JavaScript runs in the client's browser,
-and the printer host needs no Node.js runtime.  Updates are made through Guix.
-
-=(spartan services mainsail)= exports =%mainsail-nginx-configuration=, a normal
-Guix =nginx-configuration= following the upstream
-[[https://docs.mainsail.xyz/setup/manual/][manual installation guide]].  Add this to the host's =services= alongside its
-Klipper, Moonraker and networking declarations:
+Add the default configuration to the host's nginx service:
 
 #+begin_src scheme
 (use-modules (gnu services) (gnu services web) (spartan services mainsail))
@@ -265,50 +230,25 @@ Klipper, Moonraker and networking declarations:
 (service nginx-service-type %mainsail-nginx-configuration)
 #+end_src
 
-The default configuration:
+Following the [[https://docs.mainsail.xyz/setup/manual/][manual setup]], it serves Mainsail at the site root on IPv4 port 80:
 
-- Listens on IPv4 port 80 as the default server, with =server_name _= and the
-  immutable Mainsail package as its document root.
-- Uses the single-page application fallback =try_files $uri $uri/ /index.html=.
-  =index.html=, =config.json= and =sw.js= receive no-store/no-cache headers.
-- Proxies =/printer/=, =/api/=, =/access/=, =/machine/= and =/server/= to
-  Moonraker at =127.0.0.1:7125=, retaining the original URI and query string.
-- Proxies =/websocket= using HTTP/1.1, the Upgrade/Connection map and the guide's
-  86400-second read timeout.  Host and client-IP forwarding headers are set as
-  in the guide; Moonraker's own authorization configuration still applies.
-- Removes nginx's upload-size limit and disables request buffering, leaving
-  Moonraker's =max_upload_size= setting authoritative.
-- Proxies =/webcam/= through =/webcam4/= to =127.0.0.1:8080= through =8083=,
-  stripping the webcam prefix and disabling response buffering for streams.
-- Enables the guide's gzip settings at compression level 4.  Logs, runtime
-  directories and log rotation use the normal Guix nginx service configuration.
+- Immutable document root, SPA fallback, level-4 gzip and no-cache headers for
+  =index.html=, =config.json= and =sw.js=.
+- =/printer/=, =/api/=, =/access/=, =/machine/= and =/server/= proxy to
+  =127.0.0.1:7125=, preserving URIs, queries and forwarding headers.
+- =/websocket= uses HTTP/1.1 upgrades and a 86400-second read timeout.
+- Uploads stream without nginx's size limit or request buffering; Moonraker's
+  =max_upload_size= still applies.
+- =/webcam/= through =/webcam4/= map to loopback ports 8080–8083, stripping
+  prefixes and disabling stream buffering. Provision camera software separately.
 
-Nginx starts independently of the printer daemons and camera backends.  The
-frontend remains available while they restart; backend requests return a proxy
-error until their target is available.  Camera software and its devices are
-configured separately.  The default HTTP setup serves Mainsail at the site's
-root, with API and WebSocket requests on the same origin.
+Nginx starts independently of backends and uses standard Guix logging, runtime
+directories and log rotation. Moonraker authorization still applies.
 
-The =mainsail-nginx-configuration= constructor accepts these keyword arguments:
-
-- =#:package=: a frontend package providing =share/mainsail=; defaults to =mainsail=.
-- =#:listen= and =#:server-name=: nginx service lists, defaulting to
-  ='("80 default_server")= and ='("_")=.  Include ="[::]:80 default_server"= in
-  =#:listen= when enabling an IPv6 listener.
-- =#:moonraker-address=: an nginx upstream server address, default
-  ="127.0.0.1:7125"=.
-- =#:webcams=: an ordered list of upstream server addresses.  Use ='()= to omit
-  webcam routes, or list only the cameras being provisioned.
-- =#:gzip?=: defaults to =#t=; set =#f= to disable compression on smaller hosts.
-- =#:config-file=: an optional file-like =config.json=, served with an exact
-  nginx alias instead of changing files in the package.  The default =#f=
-  serves the release's original configuration.
-
-For example, to set a hostname, expose one camera and supply UI defaults:
+Customize with =mainsail-nginx-configuration=:
 
 #+begin_src scheme
-(use-modules (gnu services) (gnu services web) (guix gexp)
-             (spartan services mainsail))
+(use-modules (guix gexp))
 
 (service nginx-service-type
          (mainsail-nginx-configuration
@@ -318,27 +258,23 @@ For example, to set a hostname, expose one camera and supply UI defaults:
                                    "{\"defaultLocale\":\"en\",\"defaultMode\":\"dark\"}\n")))
 #+end_src
 
-The result can be inherited with =nginx-configuration= to customize nginx's
-global settings.  It supplies its own server/upstream blocks and WebSocket
-map; preserve those fields when combining it with other sites.  A working
-deployment also needs the Moonraker and Klipper configurations described above,
-including the printer's =virtual_sdcard=, =display_status= and =pause_resume=.
+Other keywords: =#:package= (provides =share/mainsail=), =#:listen= (default
+='("80 default_server")=), =#:moonraker-address= (default ="127.0.0.1:7125"=)
+and =#:gzip?= (default =#t=). =#:server-name= defaults to ='("_")=; add
+="[::]:80 default_server"= to the listener list for IPv6. An empty =#:webcams=
+list omits camera routes. =#:config-file= serves a file-like JSON override
+without changing the package; =#f= uses upstream defaults.
 
-Run =guix repl -L modules tests/mainsail.scm= to build the package, check both
-default and customized configurations with =nginx -t=, and exercise static
-assets, SPA fallback, compression, configuration overrides, API requests,
-uploads, webcam routes and bidirectional WebSocket forwarding.  The test runs
-nginx unprivileged on loopback with a mock backend and needs no printer hardware.
+The result is a normal =nginx-configuration= record. Inherit it for global
+settings; retain its server/upstream blocks and WebSocket map when combining
+sites. Use the Klipper and Moonraker setup above for the printer backend.
 
 ** Network UPS Tools
 
-=(spartan packages nut)= exports =nut=, Network UPS Tools 2.8.5, with USB,
-serial and SNMP drivers, OpenSSL support, =upsd= and command-line clients.
-Optional protocol drivers whose libraries are absent (such as Modbus and IPMI)
-are not built.
-
-=(spartan services nut)= provides =upsd-service-type= and =upsd-configuration=.
-Add a service to the consuming operating system's =services=:
+NUT 2.8.5 includes USB, serial and SNMP drivers, OpenSSL support, =upsd= and
+clients. Optional protocols without their libraries, such as Modbus/IPMI,
+are omitted. Declare each UPS using a driver from the
+[[https://networkupstools.org/stable-hcl.html][hardware compatibility list]]:
 
 #+begin_src scheme
 (use-modules (gnu services) (spartan services nut))
@@ -350,941 +286,139 @@ Add a service to the consuming operating system's =services=:
                       (driver "usbhid-ups")
                       (port "auto")
                       (extra-config "vendorid = 051d\nserial = YOUR-SERIAL\n"))))
-          ;; Optional file managed by the consumer and readable by nut.
-          (users-file "/run/secrets/upsd.users")))
+          (users-file "/run/secrets/upsd.users")
+          (shepherd-requirement '(sops-secrets))))
 #+end_src
 
-Select the driver for the exact model and connection type from
-https://networkupstools.org/stable-hcl.html. Each =nut-ups= requires a unique
-=name= and a =driver= executable name; =port= defaults to =auto=. Its
-=extra-config= is appended to that device's =ups.conf= section. Only declared
-drivers are started, one foreground Shepherd service named =nut-driver-NAME=
-per device. =upsd= starts after these services and networking. Shepherd restarts
-failed processes; NUT handles reconnecting to driver sockets and UPS hardware.
+Use unique UPS names; =port= defaults to =auto= and device =extra-config= extends
+its =ups.conf= section. Each declared device gets a =nut-driver-NAME= service;
+=upsd= starts after its drivers, networking and any =shepherd-requirement=.
+Shepherd supervises processes; NUT reconnects to hardware.
 
-The service creates a =nut= account, its =/run/nut= state directory, and
-=/etc/nut= configuration; installs the package in the system profile; and
-extends udev with upstream USB permissions for the =nut= group. Serial UPS
-devices require host-provided device permissions granting =nut= access.
+The service creates the =nut= account, =/run/nut= and =/etc/nut=, installs the
+package and adds upstream USB udev permissions. Arrange serial-device access
+yourself; replug USB devices if they retain old permissions after deployment.
 
-=upsd-configuration-extra-config= supplies the entire =upsd.conf=, defaulting
-to =LISTEN 127.0.0.1 3493=. Set explicit =LISTEN= lines for LAN clients.
-=package= can override the default =nut= package. Public configuration is stored
-in the Guix store: keep passwords out of =extra-config=. =users-file= accepts an
-absolute path to a consumer-managed file. The service links =/etc/nut/upsd.users=
-directly to that path; it does not read its contents during the build or copy,
-decrypt, or change the permissions of the supplied file during activation.
-The file need not exist on the build machine. The consumer must make it readable
-by =nut=, with traversable parent directories, before =upsd= starts.
+- =extra-config= supplies the whole =upsd.conf=, default =LISTEN 127.0.0.1 3493=.
+  Add explicit listeners for LAN clients; =package= selects an alternate NUT.
+- =users-file= is an absolute, runtime-managed credentials path, linked directly
+  as =/etc/nut/upsd.users=. Make it readable by =nut=, with traversable parents,
+  before startup. It need not exist on the build host and is not copied or
+  permission-adjusted. Keep passwords out of store-backed configuration.
+- Without =users-file=, status queries work but authenticated administration
+  and =upsmon= login do not. Reload/restart =upsd= after credential changes.
+  Automatic shutdown needs a separately configured =upsmon=.
 
-Without =users-file=, the service installs an empty users file from the store,
-with no runtime provisioning needed. This allows status queries but no
-authenticated administration or =upsmon= login. Reload or restart =upsd= after
-changing the users file. Automatic host shutdown requires a separately configured
-=upsmon= deployment.
+In the example, provision the secret with SOPS and grant =nut= access (e.g.
+group =nut=, mode =0640=), or choose another runtime path and prerequisite.
+Inspect the service with =herd status upsd= and query =upsc office@localhost=.
 
-=shepherd-requirement= defaults to ='()= and adds dependencies to =upsd= alongside
-networking and its drivers. For a file decrypted by the consumer's SOPS service,
-configure the secret's permissions, register it with that service, and make
-=upsd= wait for =sops-secrets=. For example, in the consuming host configuration:
+** Raspberry Pi system and image
 
-#+begin_src scheme
-(use-modules (guix gexp) (sops secrets) (sops services sops))
+=(gnu system images raspberrypi)= provides a minimal ARM64 Pi 3 OS with DHCP,
+reference NTP (default server pool and initial clock correction), radio firmware
+and automatic root filesystem growth. The SD layout is MBR, with a 256 MiB
+FAT32 =PIBOOT= partition at =/boot/firmware= and the persistent ext4 =Guix= root
+partition last on the card.
 
-(define upsd-users
-  (sops-secret
-   (key '("upsd_users"))
-   (file (local-file "secrets.yaml"))
-   (group "nut")
-   (permissions #o640)))
+The firmware loads U-Boot, which reads =/boot/extlinux/extlinux.conf= from the
+root filesystem and boots Linux/initrd. Guix maintains kernel arguments,
+device-tree paths and previous generations. The bootloader installs firmware,
+device trees and U-Boot as FAT-compatible files; =install-rpi-boot-files= is
+available in =(spartan bootloader raspberrypi)= for custom image initializers.
 
-;; Add these service expressions to the host's services, or include upsd-users
-;; in the secrets list of its existing sops-secrets service.
-(service sops-secrets-service-type
-         (sops-service-configuration
-          (age-key-file "/etc/sops/age/keys.txt")
-          (secrets (list upsd-users))))
+| Export | Use |
+|--------+-----|
+| =rpi3-barebones-os= | Inherit to define a Pi 3 host. |
+| =rpi3-barebones-raw-image= | Ready-to-build SD image. |
+| =rpi-image-type= | Discoverable as =rpi-raw= in an installed channel. |
+| =%rpi-root-file-system=, =%rpi-boot-file-system= | Shared root/boot declarations. |
+| =%rpi-resize-file-system-service= | Root partition/filesystem growth at boot. |
+| =rpi3-package=, =rpi3-guile-fixes= | Pi 3 package adaptation and its Guile transformations. |
 
-(service upsd-service-type
-         (upsd-configuration
-          (users-file (sops-secret->secret-file upsd-users))
-          (shepherd-requirement '(sops-secrets))
-          (ups (list (nut-ups
-                      (name "office")
-                      (driver "usbhid-ups")
-                      (port "auto"))))))
-#+end_src
+Build the Pi 3 SD image using the installed channel's =rpi-raw= image type:
 
 #+begin_src sh
-guix build -L modules nut
-guix repl -L modules tests/nut.scm
-python3 tests/nut-runtime.py "$(guix build -L modules nut --no-grafts)"
-herd status upsd
-upsc office@localhost
+guix system image --system=aarch64-linux --image-type=rpi-raw \
+  -e '(@ (gnu system images raspberrypi) rpi3-barebones-os)'
 #+end_src
 
-The Scheme tests build both default and runtime-credentials configuration
-directories through Guix's outer =/etc= union, without building a system image.
-The optional runtime smoke test uses =dummy-ups= and a loopback port and needs
-no UPS hardware. Replug an already connected USB UPS after deploying its udev
-rules if it retains its old permissions.
+The OS includes both firmware packages above and =%base-firmware=, including
+=wireless-regdb=. Supply Wi-Fi credentials, radio services and host-specific
+provisioning in the consuming configuration. For added Guile-dependent packages,
+import =(gnu system images raspberrypi)= and =(gnu packages guile)=, then use
+the helper, e.g. =(rpi3-package guile-readline)=. Image construction and hardware
+boot are separate deployment steps.
 
-** Raspberry Pi
+** Package helpers
 
-=(gnu system images raspberrypi)= exports:
+*** Cortex-A53 workaround
 
-- =rpi-image-type=: discoverable as =rpi-raw= in an installed channel profile.
-- =rpi3-barebones-os= and =rpi3-barebones-raw-image=.
-- =%rpi-root-file-system=, =%rpi-boot-file-system= and
-  =%rpi-resize-file-system-service= for compatible host configurations.
-
-The Pi 3 OS includes the firmware -> U-Boot -> Linux boot chain, an ARM64
-kernel and firmware, DHCP, reference NTP clock synchronization and automatic root
-filesystem resizing. NTP uses Guix's default server pool and initial large clock
-correction (=ntpd -g=), and retains its HTTPS leap-file helper. The image
-uses MBR, a 256 MiB FAT32 =PIBOOT= partition mounted at =/boot/firmware=, and a
-persistent ext4 =Guix= root partition last on the card.
-
-=(spartan bootloader raspberrypi)= provides =u-boot-rpi-arm64-bootloader=.
-The FAT initializer and deployment installer share a file-copy routine for
-firmware, device trees, =u-boot.bin= and firmware configuration, dereferencing
-symlinks for FAT. The Pi firmware loads U-Boot from this partition rather than
-raw sectors. U-Boot's standard boot discovery reads
-=/boot/extlinux/extlinux.conf= from the root filesystem and loads the selected
-kernel and initrd directly. Guix's existing Extlinux generator supplies kernel
-arguments, matching kernel device-tree directories and previous generations;
-Guix installs the configuration atomically during updates.
-
-With the channel and its dependencies installed, build the working-tree image:
-
-#+begin_src sh
-guix system image -L modules --system=aarch64-linux --root=pi3-barebones-image \
-  modules/gnu/system/images/raspberrypi.scm
-#+end_src
-
-*** Pi 3 radio firmware
-
-=(spartan packages firmware)= provides two compatibility packages, both
-included in =rpi3-barebones-os=:
-
-- =linux-firmware-uncompressed= inherits Nonguix's =linux-firmware= package and
-  installs the complete collection with =make install= instead of
-  =make install-zst=. This includes the Pi 3's Wi-Fi firmware, board configuration
-  and regulatory blob. Kernels without firmware compression support, such as
-  =linux-arm64-generic=, cannot load the Zstd-compressed files.
-- =rpi3-bluetooth-firmware= extracts =BCM43430A1.hcd= and its Cypress license
-  from Debian Trixie's =bluez-firmware_1.2-13_all.deb= in the Debian archive.
-  The package is version-pinned and SHA256-verified; the firmware also gets the
-  =BCM43430A1.raspberrypi,3-model-b.hcd= alias.
-
-Both install uncompressed files under =lib/firmware/=. The uncompressed collection
-replaces Nonguix's compressed =linux-firmware= in the OS firmware list. The OS also
-retains =%base-firmware=, including =wireless-regdb= for kernels requiring a signed
-regulatory database.
-
-Build the packages independently from this channel's root:
-
-#+begin_src sh
-guix build -L modules linux-firmware-uncompressed rpi3-bluetooth-firmware
-#+end_src
-
-After booting the resulting image, check =dmesg= for successful =brcmfmac= and
-Bluetooth firmware loading and the absence of missing-firmware or regulatory
-database errors. =ip link show wlan0= should find the Wi-Fi interface; with
-wireless tools installed, =iw dev wlan0 scan= should find nearby networks.
-On a host with Bluetooth controller initialization and BlueZ configured,
-=bluetoothctl list= should show the controller and =bluetoothctl scan on=
-should discover nearby devices. Credentials, radio userspace services and
-hardware acceptance checks belong to the consuming host configuration.
-
-** Filesystem resizing
-
-=(spartan services file-systems)= provides =resize-file-system-service-type=
-and =resize-file-system-configuration= for any Guix System host using a plain
-disk partition. It grows the partition with =growpart=, then grows the
-filesystem. Device paths, filesystem labels and UUIDs are resolved through
-Guix's filesystem helpers; the parent disk and partition number come from
-Linux sysfs rather than device-name assumptions.
-
-For example, add a service for a filesystem already declared in the host's
-=file-systems= field:
+=(spartan packages cortex-a53)= provides =guile-with-cortex-a53-fix= for Guile's
+AArch64 erratum 843419 linker workaround. The Pi 3 OS already uses it:
 
 #+begin_src scheme
-(use-modules (gnu services)
-             (gnu system file-systems)
-             (spartan services file-systems))
-
-(define data-file-system
-  (file-system
-   (device (file-system-label "data"))
-   (mount-point "/data")
-   (type "ext4")))
-
-(service resize-file-system-service-type
-         (resize-file-system-configuration
-          (file-system data-file-system)))
+(use-modules (gnu packages guile) (spartan packages cortex-a53))
+(guile-with-cortex-a53-fix guile-3.0)
 #+end_src
 
-The configured filesystem selects the tool at configuration generation time:
+*** Compilation platform
 
-- =ext2=, =ext3= and =ext4=: =resize2fs= from =e2fsprogs=.
-- =btrfs=: =btrfs filesystem resize max= on the configured mount point.
-- =bcachefs=: =bcachefs device resize= on the resolved partition.
-
-Each instance has a mount-point-specific Shepherd provision, so a host can
-configure several filesystems. The service runs once after =user-processes=,
-when filesystems are mounted. A =growpart= NOCHANGE result still runs the
-filesystem resizer, allowing a later boot to recover from an interrupted
-resize. Other partition-growth errors and filesystem-resize errors propagate.
-Partitions can grow only into adjacent free space; the Pi image deliberately
-places its root partition last. This service does not manage LVM volumes or
-multi-device filesystems.
-
-** Mixed compilation: native userland, selectively cross-built runtime packages
-
-The Pi image uses =--system=aarch64-linux=, without a global =--target=.
-Ordinary userland packages are the actual upstream package objects, including
-reference NTP, ALSA's udev rules and Groff through =man-db=. The homelab management
-host likewise selects upstream htop, BIND, lm-sensors and OpenSSH. These selections
-retain upstream native derivations and substitute eligibility, rather than
-selecting native-equivalent =/cross-fixed= aliases.
-
-=(spartan packages mixed)= exports =package-with-compilation-system=:
+=(spartan packages mixed)= provides =package-with-compilation-system=. It adapts
+a package for compilation on a chosen platform while preserving the output
+architecture requested by Guix. Use it to prepare AArch64 packages for a Pi on
+an x86-64 build machine, for example. Pass a package and optionally =#:system=
+to choose the compilation platform; the default is the Guix runner's platform.
+Apply recipe changes before wrapping:
 
 #+begin_src scheme
-(use-modules (nongnu packages linux)
-             (spartan packages mixed))
-
-;; Default compilation platform: %system from (guix config), the platform of
-;; the Guix runner itself, independent of --system's %current-system binding.
+(use-modules (nongnu packages linux) (spartan packages mixed))
 (package-with-compilation-system linux-arm64-generic)
-
-;; Explicit override for a selected native AArch64 compilation platform.
-(package-with-compilation-system linux-arm64-generic #:system "aarch64-linux")
+(package-with-compilation-system linux-arm64-generic #:system "x86_64-linux")
 #+end_src
 
-The adapter's fallback compilation platform is fixed when it is constructed. The
-required output platform is determined during lowering, from the requested system
-or target. Available native outputs skip the cross override; otherwise different
-platforms select cross-compilation. Equal platforms select native compilation
-with target =#f= without a substitute query. Guix system names and GNU triplets are
-normalized before comparison. For a system-only cross request, the target comes
-from Guix's platform registry: the generic triplet guess
-=aarch64-unknown-linux-gnu= is not a registered target in the pinned Guix, whereas
-=aarch64-linux-gnu= is.
+*** Guile and dependency transformations
 
-On an x86-64 runner, the kernel, both patched Guile versions, Guix, Shepherd,
-Guile-SSH and Guile-Readline cross-build for AArch64 when their native outputs
-are unavailable. Other affected consumers
-use native AArch64 derivations. When evaluated on an AArch64 runner, the same
-selected packages build natively.
-Daemon offloading executes these selected derivations; it does not revise the
-compilation policy according to which worker eventually runs a job.
-
-The adapter delegates package lowering, re-evaluating deferred fields in the
-selected compilation context. It creates no copy derivation and
-preserves every output, including Guile's =debug= output, search paths and kernel
-properties. Propagated dependencies exposed to profiles are also routed, so they
-match the actual cross-built dependencies instead of silently selecting native
-copies. Package replacements and dependency grafts retain the selected
-architecture. Guix still performs its normal graft processing in the requesting
-graph; graft evaluation may realize packages even for an image =--derivation=.
-
-Apply recipe changes to the underlying package before wrapping it. The adapter
-delegates to that original recipe, rather than interpreting subsequent inherited
-argument or input overrides on the adapter as a new recipe.
-
-*** Automatic native-substitute selection
-
-=package-with-compilation-system= checks the exact native candidate before
-applying a cross-compilation override. Every declared output, including =debug=,
-must already be local or available from the daemon's configured substituters.
-Local and remote outputs can jointly satisfy one package. Recipes that disable
-substitution qualify only through local outputs. Required recipe fixes and
-runtime dependency replacements are applied before the check.
-
-The check runs lazily when resolving a package and is memoized per package and
-output platform in the running Guix process. Importing the module or constructing
-an adapter does not query substituters. Existing image/build commands and entry
-points use this behavior automatically. Query failures propagate; they are not
-silently treated as misses. Checking outputs lowers ungrafted derivations and
-downloads metadata only, starting no package builds. Normal image substitution
-and security graft processing still apply afterward.
-
-The adapter's propagated-input routing is used in both the build bag and profile
-metadata. Shared libraries therefore make the same native/cross choice even when
-Guile and Readline make different choices themselves. Other inputs retain their
-existing recipe behavior, including build-machine tools. Availability checks
-measure declared outputs rather than complete runtime-closure coverage. A native
-hit is used only if its original derivation still matches the routed propagated
-inputs; otherwise cross fallback avoids mismatched profile libraries.
-
-Guix does not expose the active command's store connection to package lowering.
-The availability check opens its own daemon connection, using its defaults; it
-does not inherit command-specific options such as =--no-substitutes= or
-=--substitute-urls=. In particular, those options can cause Guix to build a
-native candidate selected by the check instead of using the expected substitute.
-
-*** Independent recipe fixes and board policy
-
-Recipe fixes are independent of the compilation platform:
-
-| Module | Export | Change |
-|--------+--------+--------|
-| =(spartan packages cortex-a53)= | =guile-with-cortex-a53-fix= | AArch64 erratum 843419 linker flag; JIT retained |
-| =(spartan packages guile-snarf)= | =guile-with-native-snarf= | Cross-built SDK's installed preprocessor fallback |
-| =(spartan packages guile-config)= | =guile-with-native-config= | Destination-native pkg-config in the installed SDK |
-| =(spartan packages avahi)= | =guile-avahi/without-daemon-tests= | Disable tests requiring an existing Avahi daemon; upstream source retained |
-
-The Guile transformations accept an upstream package and return a recipe, without
-wrapping Guile in the compilation adapter. They preserve its source, version,
-outputs and metadata. Their argument changes remain deferred to the build context.
-
-=(spartan packages guile)= exports =make-guile-runtime-rewriter=. It accepts a
-=#:guile-transform= (default =identity=), optional =#:replacements= recipe pairs,
-and the compilation-platform =#:system= override.
-No hardware/SDK fixes or Avahi test policy are selected by default. It adapts both
-upstream Guile releases and the selected Guix, Shepherd, Guile-SSH and
-Guile-Readline consumers.
-
-The returned procedure rewrites explicit runtime and propagated dependencies,
-preserving upstream objects for unaffected packages. Recipe replacements also
-have their dependencies rewritten: an Avahi variant receives the chosen Guile.
-Unrelated build-only dependencies and implicit build-system tools stay upstream.
-For affected native consumers listing Guile in both =inputs= and =native-inputs=,
-both entries use the same replacement so =PATH= and =PKG_CONFIG_PATH= agree.
-
-For cross-built consumers, native inputs retain upstream build-machine Guile
-and tools. The helper rewrites the underlying recipe before applying the
-compilation adapter. Shepherd's propagated Fibers follows the target compilation
-route, separately from its upstream native build-time Fibers.
-
-For an SDK-only AArch64 setup, suitable for reuse by a future Pi 4 configuration:
+- =(spartan packages guile-snarf)=: =guile-with-native-snarf= adjusts Guile's
+  installed preprocessor defaults.
+- =(spartan packages guile-config)=: =guile-with-native-config= supplies a usable
+  =pkg-config= for the installed Guile SDK.
+- =(spartan packages guile)=: =make-guile-runtime-rewriter= returns a package
+  transformation accepting =#:guile-transform=, =#:replacements= (package pairs)
+  and =#:system=.
 
 #+begin_src scheme
-(use-modules (gnu packages guile)
-             (gnu packages guile-xyz)
-             (spartan packages avahi)
-             (spartan packages guile)
-             (spartan packages guile-config)
-             (spartan packages guile-snarf))
-
-(define sdk-fixes
-  (compose guile-with-native-snarf guile-with-native-config))
-(define runtime-package
+(use-modules (gnu packages guile) (spartan packages guile)
+             (spartan packages guile-config) (spartan packages guile-snarf))
+(define with-guile-sdk
   (make-guile-runtime-rewriter
-   #:guile-transform sdk-fixes
-   #:replacements `((,guile-avahi . ,guile-avahi/without-daemon-tests))
-   #:system "x86_64-linux"))
-
-(runtime-package guile-3.0)
-(runtime-package guile-readline)
+   #:guile-transform (compose guile-with-native-snarf guile-with-native-config)))
+(with-guile-sdk guile-readline)
 #+end_src
 
-Omit =#:system= to use the Guix runner's native platform. The Pi 3 image explicitly
-composes =guile-with-cortex-a53-fix= with the two SDK fixes and selects the Avahi
-test-policy variant in =(gnu system images raspberrypi)=. Its =rpi3-package= helper
-accepts a package and an optional =#:system= override, and is
-used for the base profile, Guix service and Shepherd runtime.
+Dependency helpers apply the named compatibility variants to a package's
+dependencies. Import the module and call the helper with a package:
 
-The Pi 3's hardware linker fix remains enabled for native AArch64 builds. SDK-only
-composition leaves it out in both native and cross modes. Putting a modified
-Guile only in the profile would not repair
-absolute interpreter/library references in its consumers. Those rewritten
-consumers have custom derivations and generally require rebuilding, even though
-unrelated packages can use upstream substitutes. Cross-built and native
-libraries can coexist in the closure; Guix does not unify their store paths.
+| Module | Helper |
+|--------+--------|
+| =(spartan packages compression)= | =package-with-cross-fixed-libcbor= |
+| =(spartan packages groff)= | =package-with-cross-fixed-groff= |
+| =(spartan packages gtk)= | =package-with-cross-fixed-pango= |
+| =(spartan packages linux)= | =package-with-cross-fixed-alsa=, =package-with-cross-fixed-lm-sensors= |
+| =(spartan packages maths)= | =package-with-cross-fixed-plotting= |
+| =(spartan packages tls)= | =package-with-cross-fixed-perl-net-ssleay= |
 
-Native AArch64 derivations require AArch64 execution, offloading, or transparent
-binfmt/QEMU execution for cache misses. Direct execution inside a container and
-execution through its Guix daemon are separate checks. The optional integration
-check builds a native AArch64 Guile-Zlib consumer, runs both routed Guile versions
-inside an AArch64 derivation, and exercises the consumer's compression FFI:
+For custom replacements, =(spartan packages cross)= exports
+=package-input-rewriting/cross=: pass an alist of =(original . replacement)=
+packages, then apply the returned procedure to a package. Recipe authors can
+reuse =configure-cross-perl-phase= from =(spartan packages perl)= for Perl XS
+configuration. When combining the Groff helper with the Guile rewriter, apply
+Groff first: =(compose with-guile-sdk package-with-cross-fixed-groff)=.
+
+** Development
+
+Contributors can run the complete suite from the source repository:
 
 #+begin_src sh
-guix repl -L modules tests/runtime/mixed.scm
+make check
 #+end_src
-
-=tests/mixed.scm= checks routing, same-platform fallback, exact direct-build
-derivations, metadata, propagated profile inputs, graft selection, and native
-consumers' direct Guile dependencies. Image tests check upstream package identity
-before and after image conversion. Full image construction and hardware boot
-remain separate acceptance checks.
-
-*** Shared profile libraries for Guile-Readline
-
-Upstream =make-guile-readline= copies Guile's propagated libraries into the
-Readline package. Rewriting only its direct Guile input mixed native and
-cross-built =libunistring= and =libgc=, producing profile collisions even when
-the library versions matched. Readline now uses the same
-selective compilation adapter as Guile, avoiding its slow emulated build on an
-x86 runner. The adapter routes the shared propagated library list consistently
-in both build inputs and profile metadata. Native and cross consumers therefore
-share the same selected =libunistring= and =libgc= paths. The original
-source/version is retained. An AArch64 compilation platform still selects a
-native build, and the =#:system= override remains available.
-
-Regression checks cover Readline plus interactive Guile with independent native
-and cross choices, and the combined barebones and management service
-profiles before and after image conversion. They use Guix's actual
-=check-for-collisions=, lowering ungrafted derivations without building profiles
-or realizing graft prerequisites. Production collision checks and grafting
-remain enabled. Image, management-image and named-discovery dry runs pass too.
-
-Derivation tests verify build-machine tools and selected target Guile. A full
-cross-build and runtime check of the current Readline variant remain separate.
-To build it explicitly with the Pi 3 policy:
-
-#+begin_src sh
-guix build -L modules --system=aarch64-linux \
-  -e '((@ (gnu system images raspberrypi) rpi3-package)
-       (@ (gnu packages guile) guile-readline))'
-#+end_src
-
-*** Native consumers of cross-built Guile development tools
-
-Guile-Avahi exposed a build-tool default that the initial Scheme/FFI smoke check
-did not exercise. Cross-built Guile installs =guile-snarf= with its configure-time
-preprocessor, =aarch64-linux-gnu-gcc -E=. A native AArch64 consumer instead has
-=gcc=. Autoconf's Makefile =CPP= variable is not automatically exported to the
-snarf script, so binding generation failed and left =src/*.c.x= missing.
-
-The independent =guile-with-native-snarf= transformation corrects the installed
-script after a cross-build. It preserves nonempty =CPP=, otherwise using the
-consumer's =CC= or =gcc= with =-E=. Empty =CPP= and =CC= receive the fallback.
-The corrected SDK works independently of the runtime rewriter. Native Guile
-recipes retain their upstream tool defaults.
-
-The installed =guile-config= had another configure-time tool reference: Guix
-embedded its build-machine =aarch64-linux-gnu-pkg-config= wrapper, pointing at an
-x86-64 executable. The independent =guile-with-native-config= transformation
-replaces that reference after a cross-build. The replacement is an
-absolute store reference to destination-native =pkg-config= selected through the
-mixed-compilation adapter, so the script can run on the Pi too. It retains
-Guile's own =PKG_CONFIG_PATH= and library/header references. This deliberately
-uses the primitive =%pkg-config= package: =pkg-config= is identifier syntax that
-would select the cross wrapper again in the outer cross-build context.
-
-Build the working-tree definitions using =-L modules= (or
-=-L spartan-guix/modules= from the homelab root).
-
-=tests/guile-tools.scm= checks preprocessor defaults, compiler/preprocessor
-overrides by executing a corrected script fixture, independent fix selection,
-SDK-only native/cross routing, and the SDK tool's destination architecture. The
-optional integration check compiles a small C extension with native AArch64
-=gcc=, generates its bindings with =guile-snarf=, obtains compile/link flags from
-=guile-config=, and loads and calls the extension under both Guile versions,
-with SDK-only and Pi 3 fix compositions. Its build environment must not contain
-the prefixed cross compiler:
-
-#+begin_src sh
-guix repl -L modules tests/runtime/guile-sdk.scm
-guix build -L modules --system=aarch64-linux \
-  -e '((@ (gnu system images raspberrypi) rpi3-package)
-       (@ (gnu packages guile-xyz) guile-avahi))'
-#+end_src
-
-*** Guile-Avahi daemon-dependent tests
-
-All seven tests in upstream Guile-Avahi 0.4.1 assume an Avahi daemon is already
-reachable through system D-Bus. This includes =simple-poll.scm=,
-=threaded-poll.scm=, =guile-poll.scm= and =errors.scm= as well as =publish.scm=,
-=publish+browse.scm= and =publish+resolve.scm=. Neither the upstream suite nor
-the Guix recipe starts a private daemon. There are no standalone tests in this
-version's suite to retain.
-
-=(spartan packages avahi)= provides =guile-avahi/without-daemon-tests=, setting
-=#:tests? #f= while retaining the exact upstream source. This avoids depending
-on host services during package builds.
-
-The Pi 3 configuration selects this test-policy variant explicitly through the
-rewriter's =#:replacements=. Other configurations may opt in independently of
-the hardware and SDK fixes. Dependencies still receive the selected Guile.
-This disables only Guile-Avahi's upstream integration suite; channel routing,
-SDK and image regression checks still run. Full Avahi integration testing needs
-a separately provisioned daemon. Live homelab discovery still requires Avahi
-and D-Bus as documented for the management tools.
-
-*** Selectively compiling Shepherd and Guile-SSH
-
-The runtime rewriter routes upstream =guile-ssh= and Shepherd 0.10/1.0 through
-=package-with-compilation-system= after rewriting their runtime dependencies.
-They cross-build on an x86-64 runner and build natively on an AArch64 runner,
-with the same explicit =#:system= override as Guile. Their original sources and
-test settings are retained. Cross-builds use the upstream build-system behavior
-of skipping target runtime tests; native builds still run them.
-
-Reproduce the selected package build independently of the image:
-
-#+begin_src sh
-guix build -L modules --system=aarch64-linux --keep-failed \
-  -e '((@ (gnu system images raspberrypi) rpi3-package)
-        (@ (gnu packages ssh) guile-ssh))'
-guix build -L modules --system=aarch64-linux --keep-failed \
-  -e '((@ (gnu system images raspberrypi) rpi3-package)
-       (@ (gnu packages admin) shepherd-1.0))'
-guix repl -L modules tests/runtime/mixed-consumers.scm
-#+end_src
-
-The Shepherd scripts reference the selected AArch64 Guile and target Fibers.
-Guile-SSH's ELF RUNPATH selects the corresponding =libguile=.
-=tests/runtime/mixed-consumers.scm= exercises these consumers through the daemon
-in a native AArch64 derivation: =shepherd --version= and =herd --version= load the
-runtime modules, and Guile loads the SSH C extension and creates a session.
-This smoke check is separate from full native runtime-suite coverage.
-
-*** Selectively compiling Guix
-
-Guix is also selected by the runtime rewriter for compilation through
-the adapter, with the same runner-native default and =#:system= override. Its
-recipe and source remain upstream; runtime dependency rewriting precedes adaptation.
-Guix uses the upstream latest Guile release, so its build-machine Guile and
-patched target Guile are checked against that release rather than the service
-interpreter's older Guile version. Native build-time extensions remain upstream;
-propagated runtime extensions, including Guile-SSH, follow the target route.
-
-The package dry run and derivation checks pass. A complete Guix cross-build and
-runtime check have not been run. To build Guix explicitly:
-
-#+begin_src sh
-guix build -L modules --system=aarch64-linux \
-  -e '((@ (gnu system images raspberrypi) rpi3-package)
-       (@ (gnu packages package-management) guix))'
-#+end_src
-
-Graft analysis may still realize remaining prerequisites even for an image
-=--derivation=. Full image resolution, assembly and hardware boot remain pending.
-
-*** Automatic native-substitute verification
-
-=tests/native-substitutes.scm= checks exact output queries, missing debug outputs,
-local/remote combinations, substitution-disabled recipes, lazy memoization,
-same-platform tools, and direct native/cross derivation identity. Mixed native
-and cross consumers share propagated library paths in both their derivations and
-actual Guix profile collision checks. Guile/Readline checks independently vary
-the compilation choices of both Guile versions and Readline.
-
-All 152 channel checks and 15 management-image checks pass. Barebones,
-named-discovery and management-image dry runs pass. A live availability check
-selected the native kernel; both Guile versions, Readline and Guix used their
-cross fallback. No package builds were started.
-
-*** Runtime validation
-
-Full SDK integration validation requires running =tests/runtime/guile-sdk.scm=
-for both SDK-only and Pi 3 compositions. The Guile-Avahi package build, Guix
-cross-build, full image assembly and hardware boot also remain pending.
-Run =make check-image-derivation= for the full-lowering integration check, then
-the image build and hardware acceptance procedure.
-
-** Explicit whole-graph cross-compilation fixes and workarounds
-
-An explicit whole-graph cross-build uses =--target=aarch64-linux-gnu= on an
-x86-64 build machine. The fixes below address failures in the pinned upstream
-recipes and remain available for explicit selection. The native-first Pi base OS
-does not select them. Run commands from this channel's root with
-=-L modules= to test working-tree changes rather than an older installed channel.
-
-*** Native and cross-build selection
-
-The =/cross-fixed= variants preserve upstream native derivations on both
-=x86_64-linux= and =aarch64-linux=. Their recipe changes are conditional on
-=%current-target-system= from =(guix utils)=: it is =#f= for native builds and
-a GNU target triplet, such as ="aarch64-linux-gnu"=, for cross-builds. Evaluate
-this parameter inside deferred package fields (=arguments=, =inputs= or
-=native-inputs=), rather than selecting a package in a module-level conditional.
-This lets one package definition support both build modes, including native
-build-tool dependencies used within a cross-build.
-
-Native AArch64 builds, including builds offloaded to a native AArch64 machine,
-use the upstream recipe even when the client runs on x86-64. In native mode,
-target and propagated input lists also retain upstream package dependency
-objects, rather than substituting equivalent =/cross-fixed= objects. In
-particular, ALSA utilities, lm-sensors and gnuplot select their corrected
-dependencies only in their deferred cross branch.
-
-The shared =package-input-rewriting/cross= helper in =(spartan packages cross)=
-implements the same rule for transitive dependencies. The libcbor, Groff, Pango,
-ALSA, sensor/plotting and Perl/SSL rewriting helpers use it, including the NTP,
-RRDtool and htop variants built from those helpers. It rewrites explicit target
-inputs and propagated inputs only when cross-compiling, keeps native inputs and
-implicit build tools untouched, and applies the dependency rewrite to graft
-replacements in cross mode. Wrapper construction is memoized, but input selection
-remains deferred so native and cross builds can share one loaded package object.
-
-The package tests compare native derivation paths on both supported native
-systems. =tests/cross.scm= additionally checks native target/propagated package
-input objects for all =/cross-fixed= variants, switching native/cross/native on
-one memoized graph, propagated inputs, output selectors, native tools and graft
-replacements.
-The =guile-with-cortex-a53-fix= transformation serves a different purpose: its
-hardware erratum fix applies to native AArch64 builds as well as cross-builds
-targeting AArch64.
-
-*** Modules
-
-1. *Time services: optional cross-fixed reference NTP.*
-   The Pi baseline uses upstream =ntp-service-type= with Guix's default server
-   pool and large initial clock adjustment
-   (=allow-large-adjustment?=, supplying =ntpd -g=):
-
-   #+begin_src scheme
-   (use-modules (gnu services networking) (spartan packages ntp))
-   (service ntp-service-type
-            (ntp-configuration (ntp ntp/cross-fixed)))
-   #+end_src
-
-   Hosts inheriting =rpi3-barebones-os= inherit this service directly. The initial correction
-   permits a large clock error at startup, not unrestricted large adjustments
-   throughout the daemon's lifetime.
-
-   Whole-graph cross configurations can select the variant shown above.
-   =ntp/cross-fixed= retains =update-leap= and its HTTPS dependencies. The
-   =(spartan packages tls)= variant =perl-net-ssleay/cross-fixed= runs native
-   Perl/MakeMaker with the target Perl configuration and headers, and probes
-   native OpenSSL while linking target OpenSSL. A build-only Config overlay
-   avoids loading target XS modules into native Perl. The dependency rewrite
-   covers indirect SSL inputs through HTTP::Tiny and IO::Socket::SSL too.
-   The overlay also supplies native =Errno.pm= with its architecture guard
-   removed for build-time tools only; its constants must describe the machine
-   executing those tools. This overlay is not installed in the target module.
-
-   =(spartan packages perl)= supplies =perl/cross-fixed=: it installs the
-   generated target XS headers and restores the preprocessor's =-P= option
-   when parsing errno values. Without that flag, the pinned cross-built Perl
-   produces an empty =Errno.pm= and HTTP::Tiny cannot load. Preprocessor input
-   remains a filename rather than shell redirection, since the cross-build's
-   miniperl cannot execute the target shell on the build machine. The NTP variant
-   also embeds target Perl in script shebangs and target Guile and module
-   paths in the =update-leap= wrapper. Native derivations remain identical
-   to upstream for Perl, Net::SSLeay and NTP.
-
-   These wrapper fixes address two failures after the XS build: configure could
-   not find target Perl on the native executable search path, and =wrap-script=
-   otherwise generated =#!#f= because native Guile was not an executable input.
-   The package now supplies =PATH_PERL= explicitly and passes the target Guile
-   path and target =PERL5LIB= directories to =wrap-script=.
-
-   Build and check the cross package from this channel's directory:
-
-   #+begin_src sh
-   guix build -L modules --target=aarch64-linux-gnu \
-     -e '(@ (spartan packages ntp) ntp/cross-fixed)'
-   # With Python 3, native openssl, and qemu-aarch64 available:
-   python3 tests/ntp-cross-runtime.py /gnu/store/…-ntp-4.2.8p18 /path/to/qemu-aarch64
-   #+end_src
-
-   The runtime check loads the target XS module, checks errno constants,
-   runs =ntpd --version= and =update-leap -h=, downloads over loopback HTTPS
-   with certificate verification, and verifies rejection of an untrusted
-   certificate. It does not change the machine's clock or require binfmt.
-
-2. *OpenNTPD: the local =openntpd/cross-fixed= package variant.*
-   =modules/spartan/packages/ntp.scm= inherits upstream OpenNTPD and replaces
-   two build phases only when cross-compiling. Native builds retain the upstream
-   derivation. This variant remains available for explicit selection; the Pi
-   baseline uses reference NTP.
-   - =fix-update-script= selects =/bin/sh= from native inputs for the
-     build-time bootstrap script. It retains upstream's substitution disabling
-     the Git invocation.
-   - =adjust-C_INCLUDE_PATH= removes the raw OpenBSD source-header directory
-     from both =C_INCLUDE_PATH= and =CROSS_C_INCLUDE_PATH=. Upstream only
-     adjusted the former, so cross-compilation picked up incompatible headers
-     and failed with =sys/_null.h: No such file or directory=.
-
-3. *Filesystem resizing: select tool dependencies before constructing gexps.*
-   =modules/spartan/services/file-systems.scm= supplies the channel's
-   =resize-file-system-service-type=. The upstream service retained all
-   filesystem tools through runtime dispatch, including broken cross-build
-   dependencies of =bcachefs-tools= for an ext4 root. The replacement selects
-   only the applicable tool: =e2fsprogs=, =btrfs-progs= or =bcachefs-tools=,
-   together with =cloud-utils=. The Pi therefore avoids the unused bcachefs
-   Rust/Clang dependency graph. These tool packages are otherwise unmodified.
-
-4. *libcbor: select target CMocka when cross-compiling.*
-   =(spartan packages compression)= provides =libcbor/cross-fixed=. Guix commit
-   =ebba73d4f78140c9489b71583376d59cf0a28951= enabled libcbor's tests but put
-   CMocka in =native-inputs=. The test executables link against CMocka, so
-   cross-builds need the target library. The variant moves CMocka to =inputs=
-   only for cross-builds, retaining upstream configure flags and test
-   compilation. Guix's CMake cross build system skips test execution by default.
-   Native builds retain the upstream derivation and test behavior.
-
-   =package-with-cross-fixed-libcbor= rewrites explicit transitive dependencies,
-   including =OpenSSH -> libfido2 -> libcbor=. Consumers can select it with
-   =(openssh (package-with-cross-fixed-libcbor openssh))= in an
-   =openssh-configuration=. This does not rewrite implicit build tools.
-
-5. *Resize service: include the channel's runtime module in its closure.*
-   The same service explicitly includes the =spartan= namespace when computing
-   its source-module closure. Guix's default selector includes only =gnu= and
-   =guix= modules, which omitted =(spartan build file-systems)= and caused
-   compilation of =shepherd-resize-file-system--.go= to fail. This is a
-   module-packaging fix relevant to native builds as well as cross-builds.
-
-6. *Pi bootloader: use U-Boot with Extlinux instead of the EFI/GRUB chain.*
-   =modules/spartan/bootloader/raspberrypi.scm= provides
-   =u-boot-rpi-arm64-bootloader= using stock =u-boot-rpi-arm64-bin= and
-   =raspberrypi-firmware=. The upstream =grub-efi-netboot-removable-bootloader=
-   package executed the target =grub-mknetdir= on the build machine. The channel
-   assembles boot files with native Scheme code and uses Guix's existing Extlinux
-   generator to load Linux directly.
-
-7. *ALSA: keep bootstrap tools native and udev's cat on the target.*
-   The pinned =alsa-lib= Git recipe places Autoconf, Automake and Libtool in
-   target inputs despite executing them during bootstrap. This unnecessarily
-   cross-builds Automake, whose =t/strip2.sh= test compiles an AArch64 program
-   and then invokes native =strip=, failing with an unrecognized file format.
-   =(spartan packages linux)= provides =alsa-lib/cross-fixed=, which moves
-   these three tools to native inputs for cross builds. This also makes
-   ALSA's bootstrap executable on the build machine.
-
-   =alsa-utils/cross-fixed= selects the corrected library and explicitly adds
-   target =coreutils-minimal= for =cat= in the installed udev rule.
-   =package-with-cross-fixed-alsa= rewrites explicit dependencies for consumers
-   selecting the variant. No tests are disabled, audio rules
-   are retained, and native ALSA recipes are unchanged.
-   Adding target =coreutils-minimal= also fixes the subsequent
-   =patch-alsactl-udev-rules= failure looking for =bin/cat= in target inputs.
-
-8. *Groff: use native formatters to build documentation.*
-   =groff-minimal= 1.24.0 still builds documentation: its inherited
-   =--with-doc=no= flag is no longer recognized upstream. The stock cross
-   make flags supply =GROFFBIN= but leave =pdfmom='s =GROFF_COMMAND= set to
-   =test-groff=, which is absent from the executable search path and would
-   invoke target binaries if found. =(spartan packages groff)= provides
-   =groff/cross-fixed= and =groff-minimal/cross-fixed=. Cross builds select
-   native =groff= and =pdfmom=, set =GROFF_BIN_PATH= to the native =bin/=
-   directory, and make =GROFF_COMMAND= follow =GROFFBIN=. Documentation is
-   retained and native derivations are unchanged. Whole-graph cross consumers can
-   apply =package-with-cross-fixed-groff= to packages such as =man-db=.
-
-   Apply this rewrite before the procedure returned by
-   =make-guile-runtime-rewriter= when composing both helpers. The latter can
-   clone dependencies, so applying the Groff
-   replacement afterward can miss the original package objects. Compose as
-   =(compose runtime-package package-with-cross-fixed-groff)=
-   when explicitly selecting both fixes.
-
-9. *BIND: omit the obsolete target PLY dependency.*
-   =(spartan packages dns)= provides =isc-bind/cross-fixed=. The pinned BIND
-   9.19.24 recipe lists =python-ply= in target inputs, but that source release
-   no longer contains the old =isc= Python module that used PLY. The only
-   PLY references in its release archive are historical changelog entries.
-   The stale input causes even image =--dry-run= to fail during lowering:
-
-   #+begin_example
-   python-ply@3.11: build system `pyproject' does not support cross builds
-   #+end_example
-
-   The variant removes only =python-ply= from cross-build inputs. It retains
-   Python, all build phases, the =out= and =utils= outputs, and BIND's DNS
-   utilities. Native derivations remain identical to upstream. The homelab
-   Pi management host now selects upstream BIND with native compilation;
-   the channel's barebones OS does not include BIND. This is a correction to
-   BIND's dependency list, not general cross-build support for =pyproject=.
-
-10. *Pango: disable introspection metadata generation for cross builds.*
-    =(spartan packages gtk)= provides =pango/cross-fixed=. The pinned recipe
-    forces =-Dintrospection=enabled=, but Meson cannot find the target
-    =gobject-introspection-1.0= dependency: the recipe supplies only native
-    introspection tools. The variant selects =-Dintrospection=disabled= and
-    removes the unused native scanner input only for cross builds. Pango's
-    C libraries and Cairo, Fontconfig, FreeType, HarfBuzz and Xft rendering
-    dependencies remain enabled. Cross-built GIR/typelib language-binding
-    metadata is omitted; this variant is for C consumers, not applications
-    requiring introspection bindings. Native builds retain upstream
-    introspection and the exact upstream derivation.
-
-    The homelab management image pulls this dependency through
-    =htop -> lm-sensors -> gnuplot/rrdtool -> pango=. The plotting variants
-    below select the corrected Pango, and =package-with-cross-fixed-pango=
-    is available for other explicit dependency chains.
-
-11. *gnuplot: add native Lua for documentation generation.*
-    =(spartan packages maths)= provides =gnuplot/cross-fixed=. Its TikZ help
-    generation executes =lua ../term/lua/gnuplot-tikz.lua termhelp=, while the
-    stock recipe supplies Lua only as a target library. The variant adds the
-    same Lua package to native inputs for cross builds and retains target Lua
-    for linking and runtime use, as well as documentation and plotting
-    backends. It selects =pango/cross-fixed= for rendering.
-
-12. *RRDtool: select target pkg-config and cross-compile Perl bindings.*
-    =(spartan packages rrdtool)= provides =rrdtool/cross-fixed=. Its custom
-    configure checks search for literal =pkg-config= rather than honoring the
-    target wrapper, incorrectly reporting missing GLib/regex support. The
-    variant replaces that executable with =pkg-config-for-target= in the
-    generated configure script.
-
-    RRDtool's Perl XS binding otherwise compiles with native =gcc= and fails
-    to link target =librrd=. The variant adds target =perl/cross-fixed= and
-    uses the shared =configure-cross-perl-phase= from =(spartan packages perl)=
-    after configure, while retaining native Perl for build-time execution.
-    Net::SSLeay uses the same build-only Config overlay. This preserves the
-    =RRDs= XS and =RRDp= piped bindings instead of disabling them. The test
-    environment also resolves its native timezone data from native inputs.
-    Rendering uses =pango/cross-fixed=.
-
-13. *lm-sensors: embed target script tools and select the cross compiler.*
-    =(spartan packages linux)= provides =lm-sensors/cross-fixed=. Its script
-    patch phase assumes that Coreutils, Grep and Sed are target inputs, but
-    those implicit build-system tools are native during a cross build. The
-    variant adds explicit target inputs for =uname=, =cat=, =cut=, =sleep=,
-    =readlink=, =grep= and =sed=, and passes target =CC= and =AR= to Make.
-    It retains both =lib= and =out= outputs, the sensor scripts, and the
-    corrected gnuplot/RRDtool dependencies above.
-
-    =(spartan packages admin)= exports =htop/cross-fixed=, encapsulating this
-     dependency rewrite. Explicit whole-graph cross configurations can select
-     that package directly:
-
-    #+begin_src scheme
-    (use-modules (spartan packages admin))
-    ;; In the host's package list:
-    htop/cross-fixed
-    #+end_src
-
-    This covers both plotting branches without removing sensor support.
-    Native htop, gnuplot, RRDtool and lm-sensors derivations remain identical
-    to upstream. =package-with-cross-fixed-lm-sensors= and
-    =package-with-cross-fixed-plotting= remain available for other consumers.
-
-*** Verification and current image-build status
-
-The reference NTP, ALSA library/utilities, minimal Groff, BIND, and the complete
-htop/lm-sensors/gnuplot/RRDtool/Pango chain have successfully cross-built from
-x86-64 to AArch64. The NTP runtime check above
-verifies that the compiled XS extension works with target Perl and OpenSSL,
-including certificate-verified HTTPS and rejection of an untrusted certificate.
-The cross-built =troff= also formatted text under AArch64 QEMU, and BIND's
-=named -v= and =dig -v= ran successfully under the same emulator.
-Target Pango rendered a PNG under QEMU, =gnuplot --version= and =htop --version=
-ran successfully, and target Perl loaded and called RRDtool's compiled =RRDs=
-extension. The NTP HTTPS runtime check also passed after extracting the shared
-Perl cross-configuration phase.
-
-=tests/ntp.scm=, =tests/linux.scm=, =tests/groff.scm=, =tests/dns.scm= and
-=tests/monitoring.scm= check
-dependency selection and unchanged native x86-64/AArch64 derivations. The image tests
-check selection of upstream udev rules and =man-db= dependencies before
-and after image conversion. The SRFI-64 suites and selected Guix lint checks
-passed; these checks do not constitute a boot test or a complete image build.
-BIND retains upstream lint findings for its =nghttp2= input label and its
-=check= phase not honoring =#:tests?=; the cross variant does not alter those
-phases or native recipes.
-
-For isolated package builds from this channel's root:
-
-#+begin_src sh
-guix build -L modules --target=aarch64-linux-gnu --no-grafts \
-  -e '(@ (spartan packages ntp) ntp/cross-fixed)'
-guix build -L modules --target=aarch64-linux-gnu --no-grafts \
-  -e '(@ (spartan packages linux) alsa-utils/cross-fixed)'
-guix build -L modules --target=aarch64-linux-gnu --no-grafts \
-  -e '(@ (spartan packages groff) groff-minimal/cross-fixed)'
-guix build -L modules --target=aarch64-linux-gnu --no-grafts \
-  -e '(@ (spartan packages dns) isc-bind/cross-fixed)'
-guix build -L modules --target=aarch64-linux-gnu --no-grafts \
-  -e '(@ (spartan packages admin) htop/cross-fixed)'
-#+end_src
-
-Whole-graph cross-compilation requires explicitly selecting these variants.
-The Pi configuration uses the mixed policy above. A completed dry run does not
-establish that every remaining package builds or that the resulting image boots
-on hardware.
-
-*** Related image and runtime corrections
-
-1. The boot-file bundle explicitly sets =arm_64bit=1= in the last firmware
-   configuration include: upstream's initial value can reflect the x86 machine
-   that loaded the module. Its shared image/deployment installer dereferences
-   symlinks for FAT and installs =u-boot.bin= as a file. The image keeps the FAT
-   partition at MBR type =0x0C= and mounted at =/boot/firmware=, avoiding Guix's
-   special =/boot/efi= rewriting. These address boot-image construction, not CPU
-   emulation.
-
-2. The replacement resize implementation also resolves device aliases and parent
-   partitions, waits for the relevant mount, uses
-   =btrfs filesystem resize max MOUNT-POINT=, and retries filesystem growth after
-   =growpart= reports NOCHANGE.
-   Those are runtime correctness fixes, independent of cross-compilation.
-
-*** Cortex-A53 Guile linker workaround
-
-=(spartan packages cortex-a53)= provides =guile-with-cortex-a53-fix=.
-It preserves the upstream version and build settings of its input recipe,
-appending =-Wl,--fix-cortex-a53-843419= to =LDFLAGS= only when
-building for AArch64, natively or by cross-compilation. Existing linker flags
-are preserved. JIT support remains enabled.
-
-The Pi 3 OS explicitly composes this fix with its SDK fixes and uses
-=rpi3-package= from =(gnu system images raspberrypi)= for its system packages,
-Guix service package and Shepherd runtime, including their explicit runtime Guile
-extension dependencies. The Shepherd override belongs in =essential-services=
-so it replaces the default instance rather than adding a second root service.
-Consumers adding Guile-dependent packages should apply the same helper.
-This does not globally replace Guix's default interpreter for generated boot
-scripts or implicit build-system inputs.
-
-This addresses a suspected Cortex-A53 erratum 843419 sequence in compiled
-=libguile= code. The linker can rewrite susceptible =ADRP= sequences or insert
-veneers; it does not process machine code emitted later by the JIT.
-
-** Development and tests
-
-With GNU Make and the channel's dependencies installed, run from this repository
-root:
-
-#+begin_src sh
-make check check-image
-#+end_src
-
-=make check= runs every =tests/*.scm= SRFI-64 suite. These exercise service
-graphs, partition layout and mounts, root resizing, the real boot initializer,
-the 64-bit firmware override, resize command execution and filesystem-specific
-tool dependencies. Resize tests use a synthetic sysfs tree and harmless
-commands, requiring no block devices or root privileges.
-=make check-image= and =make check-discovery= dry-run the AArch64 image and
-named discovery. A dry run may stop at the first prerequisite group needed for
-graft analysis, rather than enumerate the entire image graph. The explicit
-=make check-image-derivation= integration target resolves the complete image
-derivation, realizing graft prerequisites as needed; it can build custom Guix,
-Shepherd and their extensions and requires AArch64 execution for native cache
-misses. Override =SYSTEM= to select another native image system where supported. The optional
-=tests/runtime/mixed.scm= check requires AArch64 execution and builds packages;
-it is deliberately separate from =make check=.
-
-For a Guix matching CI's revision, with a separate pinned Nonguix checkout:
-
-#+begin_src sh
-make check check-image GUIX_LOAD_FLAGS='-L /absolute/path/to/nonguix'
-#+end_src
-
-To test the committed checkout as an installed channel, including Guix's real
-named-image discovery:
-
-#+begin_src sh
-SPARTAN_GUIX_COMMIT="$(git rev-parse HEAD)" \
-  guix repl ci/channels.scm > channels-ci.scm
-make check check-image check-discovery \
-  GUIX='guix time-machine -C channels-ci.scm --'
-#+end_src
-
-=ci/channels.scm= emits a channel list containing the tested Guix revision and
-a local Git URL at the exact commit from =SPARTAN_GUIX_COMMIT= or =GITHUB_SHA=.
-Guix resolves runtime dependencies from the committed =.guix-channel=.
-The generated file works with Guix's isolated channel evaluator. Commit the
-channel changes before using this bootstrap; it loads committed source.
-The ordinary =check= and =check-image= targets exercise working-tree source
-through =-L modules=.
-
-GitHub Actions runs this real-channel bootstrap, all regression tests, the
-native image graph with mixed compilation and named discovery on pushes to =main=, pull requests and
-manual dispatch. Actions are commit-pinned, with Dependabot updates enabled.
-CI evaluation is separate from a full image build and hardware boot testing.
-
-When contributing packages, include source hashes and package license metadata,
-add meaningful checks under =tests/=, and run =guix lint= for the new package.
-When changing upstream revisions, update CI's Guix pin in =ci/channels.scm=
-and the runtime dependency revisions in =.guix-channel= as needed, then run all
-checks. Deployment locks belong in consumer repositories.
