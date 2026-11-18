@@ -40,6 +40,28 @@ and =python-periphery= (Linux peripheral I/O).
 
 Both install under =lib/firmware/= and are included in the Pi 3 OS.
 
+*** Seeed Studio 7-inch HDMI display
+
+=(spartan packages displays)= provides =seeedstudio-7inch-hdmi-config=: exact
+720×1280 panel timings for native Pi 3 VC4/KMS. Opt in from a system definition:
+
+#+begin_src scheme
+(use-modules (gnu system images raspberrypi) (spartan system displays))
+
+(with-seeedstudio-7inch-hdmi-display rpi3-barebones-os
+  #:connector "HDMI-A-1" #:early-console? #t #:rotation 270)
+#+end_src
+
+The helper customizes the selected kernel to enable EDID overrides, using the
+panel's exact 70 MHz timings even without a usable panel EDID. VC4 is the Pi's
+display driver; KMS lets Linux set display modes. By default, EDID loads through
+Guix firmware activation before udev loads VC4. =#:early-console? #t= additionally
+embeds the EDID and enables console rotation; it does not load VC4 earlier.
+Use =#:custom-kernel? #f= only with an EDID-capable kernel and VC4 loading after
+activation. Graphical rotation and USB touch alignment belong to the application
+or compositor. See the [[https://docs.google.com/viewer?url=https://github.com/SeeedDocument/Pi_screen/raw/master/Instructions_for_use.pdf][Pi 3 instructions]], [[https://github.com/SeeedDocument/wiki_english/blob/master/docs/720x1280%20HDMI%20IPS%20LCD%20Display.md][Seeed configuration guide]] and
+[[https://www.seeedstudio.com/7-inch-720x1280-HDMI-IPS-LCD-Display-p-2861.html][display specifications]].
+
 *** Compatibility packages
 
 These variants provide cross-build recipe fixes. Select the exported package

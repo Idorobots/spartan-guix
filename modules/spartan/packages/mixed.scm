@@ -10,7 +10,20 @@
   #:use-module (guix utils)
   #:use-module (ice-9 match)
   #:use-module (srfi srfi-1)
-  #:export (package-with-compilation-system))
+  #:export (package-with-compilation-system
+            map-compilation-package))
+
+;; Keep recipe transformations inside an adapter: changing the arguments on
+;; the outer package would leave the recipe captured by its lowerer unchanged.
+(define %compilation-packages (make-weak-key-hash-table))
+
+(define (map-compilation-package transform package)
+  "Apply TRANSFORM to PACKAGE's recipe, retaining any compilation adapters."
+  (match (hashq-ref %compilation-packages package)
+    ((base . system)
+     (package-with-compilation-system
+      (map-compilation-package transform base) #:system system))
+    (#f (transform package))))
 
 (define* (native-outputs-available? store package system
                                     #:key (valid? valid-path?)
@@ -102,34 +115,37 @@ before adaptation.  Preserve original output paths without copying contents."
                          (compilation-target compilation-system system target)
                          #:graft? #f)))
 
-       (package
-         (inherit candidate)
-         (location (package-location base))
-         (build-system
-          (build-system
-            (name 'mixed-compilation)
-            (description "Prefer native substitutes, otherwise compile on a selected platform")
-            (lower lower)))
-         (propagated-inputs
-          (let* ((destination (gnu-triplet->nix-system
-                               (or (%current-target-system) (%current-system))))
-                 (compilation-system (compilation-system-for destination))
-                 (target (compilation-target compilation-system
-                                             (%current-system)
-                                             (%current-target-system))))
-            (parameterize ((%current-system compilation-system)
-                           (%current-target-system target))
-              (package-propagated-inputs candidate))))
-         (replacement
-          (let* ((destination (gnu-triplet->nix-system
-                               (or (%current-target-system) (%current-system))))
-                 (compilation-system (compilation-system-for destination))
-                 (target (compilation-target compilation-system
-                                             (%current-system)
-                                             (%current-target-system))))
-            (parameterize ((%current-system compilation-system)
-                           (%current-target-system target))
-              (and=> (package-replacement base)
-                     (lambda (replacement)
-                       (package-with-compilation-system
-                        replacement #:system fallback-system)))))))))))
+       (define adapted
+         (package
+           (inherit candidate)
+           (location (package-location base))
+           (build-system
+            (build-system
+              (name 'mixed-compilation)
+              (description "Prefer native substitutes, otherwise compile on a selected platform")
+              (lower lower)))
+           (propagated-inputs
+            (let* ((destination (gnu-triplet->nix-system
+                                 (or (%current-target-system) (%current-system))))
+                   (compilation-system (compilation-system-for destination))
+                   (target (compilation-target compilation-system
+                                               (%current-system)
+                                               (%current-target-system))))
+              (parameterize ((%current-system compilation-system)
+                             (%current-target-system target))
+                (package-propagated-inputs candidate))))
+           (replacement
+            (let* ((destination (gnu-triplet->nix-system
+                                 (or (%current-target-system) (%current-system))))
+                   (compilation-system (compilation-system-for destination))
+                   (target (compilation-target compilation-system
+                                               (%current-system)
+                                               (%current-target-system))))
+              (parameterize ((%current-system compilation-system)
+                             (%current-target-system target))
+                (and=> (package-replacement base)
+                       (lambda (replacement)
+                         (package-with-compilation-system
+                          replacement #:system fallback-system))))))))
+       (hashq-set! %compilation-packages adapted (cons base fallback-system))
+       adapted))))
