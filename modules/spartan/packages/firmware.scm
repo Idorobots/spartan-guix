@@ -8,7 +8,8 @@
   #:use-module (nongnu packages linux)
   #:use-module (nonguix licenses)
   #:export (linux-firmware-uncompressed
-            rpi3-bluetooth-firmware))
+            rpi3-bluetooth-firmware
+            rpi4-bluetooth-firmware))
 
 (define linux-firmware-uncompressed
   ;; Provide uncompressed firmware for generic kernels that lack firmware
@@ -72,3 +73,32 @@ bluez-firmware package, including the board-specific alias for Raspberry Pi 3
 Model B.  The firmware is installed uncompressed for kernels without firmware
 compression support.")
     (license (nonfree "file://usr/share/doc/bluez-firmware/copyright"))))
+
+(define rpi4-bluetooth-firmware
+  (package
+    (inherit rpi3-bluetooth-firmware)
+    (name "rpi4-bluetooth-firmware")
+    (arguments
+     (list
+      #:install-plan
+      #~'(("usr/lib/firmware/brcm/BCM4345C0.hcd" "lib/firmware/brcm/")
+          ("usr/share/doc/bluez-firmware/copyright"
+           "share/doc/rpi4-bluetooth-firmware/copyright"))
+      #:phases
+      #~(modify-phases %standard-phases
+          (replace 'unpack
+            (lambda* (#:key source #:allow-other-keys)
+              (invoke "ar" "x" source "data.tar.xz")
+              (invoke "tar" "xf" "data.tar.xz"
+                      "./usr/lib/firmware/brcm/BCM4345C0.hcd"
+                      "./usr/share/doc/bluez-firmware/copyright")))
+          (add-after 'install 'add-board-alias
+            (lambda _
+              (symlink "BCM4345C0.hcd"
+                       (string-append
+                        #$output
+                        "/lib/firmware/brcm/BCM4345C0.raspberrypi,4-model-b.hcd")))))))
+    (synopsis "Bluetooth firmware for Raspberry Pi 4 Model B")
+    (description
+     "This package provides the uncompressed BCM4345C0 Bluetooth firmware from
+Debian's bluez-firmware package, including the Raspberry Pi 4 Model B alias.")))

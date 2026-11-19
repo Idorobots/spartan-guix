@@ -32,4 +32,4 @@
       ((#:phases phases)
        #~(modify-phases #$phases
            (add-after 'install 'expose-rpi2-device-tree
-             #$install-rpi2-device-tree-alias)))))))
+              #$install-rpi2-device-tree-alias)))))))
