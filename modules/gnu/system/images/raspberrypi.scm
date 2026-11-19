@@ -21,19 +21,23 @@
   #:use-module (spartan packages guile-config)
   #:use-module (spartan packages guile-snarf)
   #:use-module (spartan packages mixed)
+  #:use-module (spartan packages raspberrypi)
   #:use-module (spartan services file-systems)
   #:export (%rpi-root-file-system
             %rpi-boot-file-system
             %rpi-resize-file-system-service
             rpi-image-type
+            rpi2-image-type
+            rpi2-barebones-os
+            rpi2-barebones-raw-image
             rpi3-guile-fixes
             rpi3-package
             rpi3-barebones-os
             rpi3-barebones-raw-image))
 
 ;; Guix discovers exported image types in this namespace when the channel is
-;; installed. The SD layout is shared by compatible AArch64 Pi hosts; the
-;; concrete barebones OS below supplies the Pi 3 boot chain and kernel.
+;; installed. Pi 2 (ARMv7) and Pi 3 (AArch64) share the SD layout, mounts and
+;; resize service, with separate boot chains, kernels and image platforms.
 
 (define %rpi-root-label "Guix")
 (define %rpi-boot-label "PIBOOT")
@@ -70,7 +74,35 @@
   ;; Hosts include this service for both initial boot and later guix deploys.
   (service resize-file-system-service-type
            (resize-file-system-configuration
-            (file-system %rpi-root-file-system))))
+             (file-system %rpi-root-file-system))))
+
+;; Pi 2 Model B v1.0/v1.1: BCM2836, Cortex-A7, 32-bit ARMv7 hard float.
+(define rpi2-barebones-os
+  (operating-system
+   (host-name "raspberrypi2")
+   (timezone "Etc/UTC")
+   (locale "en_US.utf8")
+   (kernel (package-with-compilation-system linux-rpi2))
+   (kernel-arguments
+    (append '("console=ttyAMA0,115200" "console=tty1")
+            %default-kernel-arguments))
+   ;; Include runtime blobs for attached devices as well as boot firmware.
+   (firmware (cons (package-with-compilation-system linux-firmware-uncompressed)
+                   %base-firmware))
+   ;; multi_v7_defconfig builds the Pi's SD host and ext4 drivers in.
+   (initrd-modules '())
+   (bootloader
+    (bootloader-configuration
+     (bootloader u-boot-rpi-2-bootloader)
+     (targets (list (file-system-mount-point %rpi-boot-file-system)))))
+   (file-systems
+    (append (list %rpi-root-file-system %rpi-boot-file-system)
+            %base-file-systems))
+   (services
+    (cons* (service dhcpcd-service-type)
+           (service ntp-service-type)
+           %rpi-resize-file-system-service
+           %base-services))))
 
 (define rpi3-barebones-os
   (operating-system
@@ -144,6 +176,21 @@
          (partition
           (inherit root-partition)
           (label %rpi-root-label)))))))))
+
+(define rpi2-image-type
+  (image-type
+   (name 'rpi2-raw)
+   (constructor
+    (lambda (os)
+      (image
+       (inherit (os->image os #:type rpi-image-type))
+       (name 'rpi2-raw)
+       (platform armv7-linux))))))
+
+(define rpi2-barebones-raw-image
+  (image
+   (inherit (os->image rpi2-barebones-os #:type rpi2-image-type))
+   (name 'rpi2-barebones-raw-image)))
 
 (define rpi3-barebones-raw-image
   (image

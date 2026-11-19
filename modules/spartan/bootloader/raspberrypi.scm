@@ -5,8 +5,25 @@
   #:use-module (gnu packages raspberry-pi)
   #:use-module (guix gexp)
   #:use-module (nongnu packages linux)
-  #:export (u-boot-rpi-arm64-bootloader
+  #:export (u-boot-rpi-2-bootloader
+            u-boot-rpi-arm64-bootloader
             install-rpi-boot-files))
+
+(define rpi2-config
+  ;; Independent of the machine evaluating this module. The v1 Pi 2 has
+  ;; Cortex-A7 cores and must enter the 32-bit rpi_2 U-Boot build.
+  (raspi-config-file "config.txt"
+                     '("arm_64bit=0"
+                       "enable_uart=1"
+                       "device_tree=bcm2709-rpi-2-b.dtb"
+                       "kernel=u-boot.bin")))
+
+(define rpi2-boot-files
+  (directory-union
+   "rpi2-boot-files"
+   (list raspberrypi-firmware
+         u-boot-rpi-2-bin
+         (file-union "rpi2-config" `(("config.txt" ,rpi2-config))))))
 
 (define rpi-custom-config
   ;; The upstream config is constructed when its module is loaded, possibly
@@ -49,3 +66,9 @@
    (installer install-rpi-bootloader)
    ;; The Pi firmware reads u-boot.bin from FAT, not raw sectors.
    (disk-image-installer #f)))
+
+(define u-boot-rpi-2-bootloader
+  (bootloader
+   (inherit u-boot-rpi-arm64-bootloader)
+   (name 'u-boot-rpi-2)
+   (package rpi2-boot-files)))

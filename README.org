@@ -38,7 +38,8 @@ and =python-periphery= (Linux peripheral I/O).
 - =rpi3-bluetooth-firmware=: version-pinned Debian BCM43430A1 firmware and its
   Cypress license, with the =BCM43430A1.raspberrypi,3-model-b.hcd= alias.
 
-Both install under =lib/firmware/= and are included in the Pi 3 OS.
+Both install under =lib/firmware/=. Pi 2 and Pi 3 include the uncompressed
+Linux firmware collection; Pi 3 additionally includes its Bluetooth firmware.
 
 *** Seeed Studio 7-inch HDMI display
 
@@ -93,6 +94,8 @@ in place of its upstream counterpart.
 | =(spartan services nut)= | =upsd-service-type= | Supervised UPS drivers, server configuration and USB permissions. |
 | =(spartan services file-systems)= | =resize-file-system-service-type= | Grow a partition and filesystem at boot. |
 | =(spartan bootloader raspberrypi)= | =u-boot-rpi-arm64-bootloader= | Pi firmware → U-Boot → Extlinux boot chain. |
+| =(spartan bootloader raspberrypi)= | =u-boot-rpi-2-bootloader= | 32-bit Pi 2 v1 firmware → U-Boot → Extlinux boot chain. |
+| =(gnu system images raspberrypi)= | =rpi2-barebones-os=, =rpi2-barebones-raw-image= | Minimal ARMv7 Pi 2 v1 system and SD-card image. |
 | =(gnu system images raspberrypi)= | =rpi3-barebones-os=, =rpi3-barebones-raw-image= | Minimal ARM64 Pi 3 system and SD-card image. |
 
 For filesystem growth, reference a filesystem already declared in the host:
@@ -335,11 +338,16 @@ In the example, provision the secret with SOPS and grant =nut= access (e.g.
 group =nut=, mode =0640=), or choose another runtime path and prerequisite.
 Inspect the service with =herd status upsd= and query =upsc office@localhost=.
 
-** Raspberry Pi system and image
+** Raspberry Pi systems and images
 
-=(gnu system images raspberrypi)= provides a minimal ARM64 Pi 3 OS with DHCP,
-reference NTP (default server pool and initial clock correction), radio firmware
-and automatic root filesystem growth. The SD layout is MBR, with a 256 MiB
+=(gnu system images raspberrypi)= provides minimal ARMv7 Pi 2 v1 and ARM64 Pi 3
+systems with DHCP, reference NTP (default server pool and initial clock
+correction), nonfree runtime firmware and automatic root filesystem growth.
+Both use non-deblobbed Linux: =linux-rpi2= from =(spartan packages raspberrypi)=
+derives an ARMv7 kernel through Nonguix's =corrupt-linux= helper, and Pi 3 uses
+Nonguix's =linux-arm64-generic=. The Pi 2 kernel retains =multi_v7_defconfig=
+and provides an unqualified =bcm2836-rpi-2-b.dtb= alias for 32-bit U-Boot.
+The SD layout is MBR, with a 256 MiB
 FAT32 =PIBOOT= partition at =/boot/firmware= and the persistent ext4 =Guix= root
 partition last on the card.
 
@@ -351,6 +359,9 @@ available in =(spartan bootloader raspberrypi)= for custom image initializers.
 
 | Export | Use |
 |--------+-----|
+| =rpi2-barebones-os= | Inherit to define a 32-bit Pi 2 v1 host. |
+| =rpi2-barebones-raw-image= | Ready-to-build ARMv7 SD image. |
+| =rpi2-image-type= | Discoverable as =rpi2-raw= in an installed channel. |
 | =rpi3-barebones-os= | Inherit to define a Pi 3 host. |
 | =rpi3-barebones-raw-image= | Ready-to-build SD image. |
 | =rpi-image-type= | Discoverable as =rpi-raw= in an installed channel. |
@@ -365,8 +376,16 @@ guix system image --system=aarch64-linux --image-type=rpi-raw \
   -e '(@ (gnu system images raspberrypi) rpi3-barebones-os)'
 #+end_src
 
-The OS includes both firmware packages above and =%base-firmware=, including
-=wireless-regdb=. Supply Wi-Fi credentials, radio services and host-specific
+Build the Pi 2 v1 image from the same module with its ARMv7 image type:
+
+#+begin_src sh
+guix system image --system=armhf-linux --image-type=rpi2-raw \
+  -e '(@ (gnu system images raspberrypi) rpi2-barebones-os)'
+#+end_src
+
+Both systems include =linux-firmware-uncompressed= and =%base-firmware=,
+including =wireless-regdb=. Pi 3 also includes =rpi3-bluetooth-firmware=.
+Supply Wi-Fi credentials, radio services and host-specific
 provisioning in the consuming configuration. For added Guile-dependent packages,
 import =(gnu system images raspberrypi)= and =(gnu packages guile)=, then use
 the helper, e.g. =(rpi3-package guile-readline)=. Image construction and hardware
