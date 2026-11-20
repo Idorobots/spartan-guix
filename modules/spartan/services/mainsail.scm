@@ -37,8 +37,10 @@
 PACKAGE provides share/mainsail. LISTEN and SERVER-NAME use the nginx service's
 list syntax. MOONRAKER-ADDRESS and WEBCAMS are nginx upstream server addresses;
 each webcam gets /webcam/, /webcam2/, etc. An empty list disables webcam routes.
-CONFIG-FILE optionally supplies a file-like config.json. GZIP? controls static
-response compression. The returned record can be passed to nginx-service-type."
+CONFIG-FILE optionally supplies one file-like config.json. GZIP? controls
+static response compression. Pass the returned record to nginx-service-type."
+  (unless (or (not config-file) (file-like? config-file))
+    (error "Mainsail config-file must be a single file-like object or #f" config-file))
   (nginx-configuration
    (extra-content
     '("map $http_upgrade $connection_upgrade {"

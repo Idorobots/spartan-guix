@@ -34,16 +34,22 @@ sudo.write_text(
     "assert sys.argv[1:3] == ['-n', '--']\nos.execv(sys.argv[3], sys.argv[3:])\n"
 )
 sudo.chmod(0o755)
-test_configuration = root / "moonraker.conf"
+test_tree = root / "configuration"
+test_tree.mkdir()
+(test_tree / "config").symlink_to(configuration.parent / "config", target_is_directory=True)
+test_configuration = test_tree / configuration.name
 test_configuration.write_text(configuration.read_text().replace(str(policy), str(test_policy))
                               .replace("/run/privileged/bin/sudo", str(sudo)))
 (root / "application.conf").write_text(
-    f"[server]\nhost: 127.0.0.1\nport: {port}\n"
+    "[server]\nhost: 127.0.0.1\nport: 0\n"
     f"klippy_uds_address: {root / 'missing-klippy.sock'}\n"
     "[machine]\nprovider: none\nvalidate_service: True\n"
+    "[include parts/override.conf]\n"
+)
+(root / "override.conf").write_text(
+    f"[server]\nport: {port}\n[machine]\nprovider: systemd_dbus\n"
     "[include authorization.conf]\n"
 )
-(root / "authorization.conf").write_text("[authorization]\ntrusted_clients: 127.0.0.1/32\n")
 environment = {"HOME": str(data), "LC_ALL": "C", "PATH": "/nonexistent"}
 quote = lambda value: json.dumps(str(value))
 command = [moonraker / "bin/moonraker", "-d", data, "-c", test_configuration]
@@ -104,7 +110,7 @@ with (root / "runtime.log").open("w+") as log:
         assert status()["klipper"]["active_state"] == "inactive"
         assert api("/machine/sudo/info?check_access=true")["sudo_access"]
         assert not api("/server/info")["warnings"]
-        print("PASS: generated settings override application provider; relative includes and installed sudo diagnostic work")
+        print("PASS: later includes override the listener port; Shepherd settings win and relative includes work")
         old = status()["moonraker"]["pid"]
         for action in ("start", "restart", "stop"):
             assert api(f"/machine/services/{action}", {"service": "klipper"}) == "ok"

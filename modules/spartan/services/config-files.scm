@@ -1,0 +1,33 @@
+(define-module (spartan services config-files)
+  #:use-module (guix gexp)
+  #:use-module (srfi srfi-1)
+  #:export (validate-config-files))
+
+(define (relative-file-name? path)
+  (and (string? path)
+       (not (string-any (lambda (char) (char<? char #\space)) path))
+       (every (lambda (part) (not (member part '("" "." ".."))))
+              (string-split path #\/))))
+
+(define (paths-overlap? a b)
+  (or (string=? a b)
+      (string-prefix? (string-append a "/") b)
+      (string-prefix? (string-append b "/") a)))
+
+(define* (validate-config-files service files #:key entry-point (reserved '())
+                                (source? file-like?))
+  "Validate FILES as an alist of relative destinations and file sources."
+  (unless (list? files)
+    (error "config-files must be an alist" service files))
+  (let loop ((rest files) (paths reserved))
+    (unless (null? rest)
+      (let ((entry (car rest)))
+        (unless (and (pair? entry) (relative-file-name? (car entry))
+                     (source? (cdr entry)))
+          (error "Invalid config-files entry; expected a (relative-path . source) pair"
+                 service entry))
+        (when (any (lambda (path) (paths-overlap? path (car entry))) paths)
+          (error "Conflicting config-files destination" service (car entry)))
+        (loop (cdr rest) (cons (car entry) paths)))))
+  (when (and entry-point (not (assoc entry-point files)))
+    (error "config-files is missing the required entry point" service entry-point)))

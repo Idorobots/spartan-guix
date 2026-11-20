@@ -16,14 +16,15 @@
   (call-with-input-file path get-string-all))
 
 (write-text seed "initial configuration\n")
-(initialize-klipper-state state run seed (getuid) (getgid))
+(define seeds (list (cons "printer.cfg" seed)))
+(initialize-klipper-state state run seeds (getuid) (getgid))
 (test-equal "initial configuration is copied" "initial configuration\n"
   (read-text config-file))
 (test-equal "configuration is writable by its owner" #o640
   (logand #o777 (stat:mode (stat config-file))))
 (write-text config-file "calibrated configuration\n")
 (write-text seed "updated seed\n")
-(initialize-klipper-state state run seed (getuid) (getgid))
+(initialize-klipper-state state run seeds (getuid) (getgid))
 (test-equal "subsequent activation preserves calibration" "calibrated configuration\n"
   (read-text config-file))
 (define workspace (string-append run "/firmware"))
@@ -40,7 +41,7 @@
 (chmod (string-append firmware-source "/scripts/flash.sh") #o555)
 (symlink (string-append firmware-source "/Makefile")
          (string-append firmware-source "/source-link"))
-(initialize-klipper-state state run seed (getuid) (getgid)
+(initialize-klipper-state state run seeds (getuid) (getgid)
                           #:firmware-source firmware-source)
 (test-assert "firmware copy is writable, owned correctly and retains executable tools"
   (let ((makefile (stat (string-append workspace "/Makefile")))
@@ -57,14 +58,14 @@
 (mkdir (string-append workspace "/out"))
 (write-text (string-append workspace "/out/klipper.bin") "built firmware\n")
 (write-text (string-append firmware-source "/new-source") "new package\n")
-(initialize-klipper-state state run seed (getuid) (getgid)
+(initialize-klipper-state state run seeds (getuid) (getgid)
                           #:firmware-source firmware-source)
 (test-assert "reconfiguration preserves the current firmware build without merging source"
   (and (string=? "board settings\n" (read-text (string-append workspace "/.config")))
        (string=? "built firmware\n" (read-text (string-append workspace "/out/klipper.bin")))
        (not (file-exists? (string-append workspace "/new-source")))))
 (delete-file-recursively run)
-(initialize-klipper-state state run seed (getuid) (getgid)
+(initialize-klipper-state state run seeds (getuid) (getgid)
                           #:firmware-source firmware-source)
 (test-assert "a cleared runtime directory gets fresh source while printer calibration persists"
   (and (file-exists? (string-append workspace "/new-source"))
@@ -72,8 +73,23 @@
        (not (file-exists? (string-append workspace "/out")))
        (string=? "calibrated configuration\n" (read-text config-file))))
 
-(define config
-  (klipper-configuration (config-file (plain-file "printer.cfg" "[printer]\n"))))
+(define outside (string-append test-dir "/outside"))
+(mkdir outside)
+(symlink outside (string-append state "/linked"))
+(test-error "a symlink parent cannot redirect fragment creation" #t
+  (initialize-klipper-state state run (list (cons "linked/fragment.cfg" seed))
+                            (getuid) (getgid)))
+(test-assert "no fragment is written through a symlink"
+  (not (file-exists? (string-append outside "/fragment.cfg"))))
+(symlink (string-append outside "/missing.cfg") (string-append state "/dangling.cfg"))
+(test-error "a dangling destination link cannot redirect fragment creation" #t
+  (initialize-klipper-state state run (list (cons "dangling.cfg" seed)) (getuid) (getgid)))
+(test-assert "no config is written through a dangling link"
+  (not (file-exists? (string-append outside "/missing.cfg"))))
+
+(define printer-seed (plain-file "printer.cfg" "[printer]\n"))
+(define printer-entry (cons "printer.cfg" printer-seed))
+(define config (klipper-configuration (config-files (list printer-entry))))
 (define firmware-config
   (klipper-configuration (inherit config) (firmware-workspace? #t)))
 (test-assert "firmware workspace is opt-in"
@@ -93,8 +109,23 @@
          (member ''("dialout") form))))
 (test-error "reject store-backed writable state" #t
   ((service-extension-compute (extension activation-service-type))
-   (klipper-configuration (config-file (plain-file "printer.cfg" ""))
-                          (state-directory "/gnu/store/printer"))))
+   (klipper-configuration (inherit config)
+                           (state-directory "/gnu/store/printer"))))
+(for-each
+ (lambda (files)
+   (test-error "reject invalid or conflicting config-files entries" #t
+     ((service-extension-compute (extension activation-service-type))
+      (klipper-configuration (config-files files)))))
+ (cons* '() printer-seed (list printer-seed)
+        (list (cons "frag.cfg" printer-seed))
+        (list printer-entry (list "frag.cfg" printer-seed))
+        (list printer-entry (cons "config.d/a.cfg" printer-seed)
+              (cons "config.d/a.cfg" printer-seed))
+        (list printer-entry (cons "config.d/a.cfg" printer-seed)
+              (cons "config.d" printer-seed))
+        (map (lambda (path) (list printer-entry (cons path printer-seed)))
+             '("" "/abs.cfg" "config.d/../escape.cfg" "config.d//frag.cfg"
+               "printer.cfg" "printer.cfg/frag.cfg" "klippy.log"))))
 (define (activation-error config)
   (catch 'misc-error
     (lambda ()

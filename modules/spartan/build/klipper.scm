@@ -28,18 +28,74 @@
           (when (file-exists? staging)
             (delete-file-recursively staging)))))))
 
-(define* (initialize-klipper-state state run seed uid gid
-                                   #:key firmware-source)
-  (let ((config-file (string-append state "/printer.cfg")))
-    (for-each (lambda (directory)
-                (mkdir-p directory)
-                (chown directory uid gid)
-                (chmod directory #o750))
-              (list state run))
-    (unless (file-exists? config-file)
-      (copy-file seed config-file)
-      (chown config-file uid gid)
-      (chmod config-file #o640))
-    (when firmware-source
-      (initialize-klipper-firmware firmware-source
-                                   (string-append run "/firmware") uid gid))))
+(define (path-type path)
+  (catch 'system-error
+    (lambda () (stat:type (lstat path)))
+    (lambda args
+      (if (= ENOENT (system-error-errno args)) #f (apply throw args)))))
+
+(define (seed-klipper-config state seed)
+  (let loop ((directory state) (parts (string-split (car seed) #\/)))
+    (let* ((path (string-append directory "/" (car parts)))
+           (type (path-type path)))
+      (if (null? (cdr parts))
+          (case type
+            ((regular) #t)
+            ((#f)
+             (let* ((port (mkstemp! (string-append directory "/.klipper-seed-XXXXXX") "wb"))
+                    (temporary (port-filename port)))
+               (dynamic-wind
+                 (const #t)
+                 (lambda ()
+                   (call-with-input-file (cdr seed)
+                     (lambda (input) (dump-port input port)) #:binary #t)
+                   (chmod port #o640)
+                   (close-port port)
+                   ;; Publish the complete file without replacing a concurrent edit.
+                   (catch 'system-error
+                     (lambda () (link temporary path))
+                     (lambda args
+                       (unless (and (= EEXIST (system-error-errno args))
+                                    (eq? 'regular (path-type path)))
+                         (apply throw args)))))
+                 (lambda ()
+                   (unless (port-closed? port) (close-port port))
+                   (delete-file temporary)))))
+            (else (error "Klipper configuration destination is not a regular file" path)))
+          (begin
+            (case type
+              ((directory) #t)
+              ((#f) (mkdir path #o750))
+              (else (error "Klipper configuration parent is not a directory" path)))
+            (loop path (cdr parts)))))))
+
+(define (call-as-klipper uid gid thunk)
+  ;; Configuration directories are writable by Klipper and Moonraker. Never
+  ;; traverse them as root when seeding, even if a path changes after lstat.
+  (if (and (= uid (geteuid)) (= gid (getegid)))
+      (thunk)
+      (let ((saved-uid (geteuid)) (saved-gid (getegid)) (groups (getgroups)))
+        (dynamic-wind
+          (const #t)
+          (lambda ()
+            (setgroups #())
+            (setegid gid)
+            (seteuid uid)
+            (thunk))
+          (lambda ()
+            (seteuid saved-uid)
+            (setegid saved-gid)
+            (setgroups groups))))))
+
+(define* (initialize-klipper-state state run seeds uid gid
+                                    #:key firmware-source)
+  (for-each (lambda (directory)
+              (mkdir-p directory)
+              (chown directory uid gid)
+              (chmod directory #o750))
+            (list state run))
+  (call-as-klipper uid gid
+    (lambda () (for-each (lambda (seed) (seed-klipper-config state seed)) seeds)))
+  (when firmware-source
+    (initialize-klipper-firmware firmware-source
+                                 (string-append run "/firmware") uid gid)))

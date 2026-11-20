@@ -48,6 +48,8 @@
            (not (any (lambda (name) (memq name '(klipper moonraker)))
                      (shepherd-service-requirement item))))
          ((service-extension-compute (extension shepherd-root-service-type)) default)))
+(test-error "Mainsail rejects a list of config files" #t
+  (mainsail-nginx-configuration #:config-file (list (plain-file "config.json" "{}"))))
 
 (define port (unused-port))
 (define backend-port (unused-port))
@@ -58,7 +60,7 @@
    (inherit (mainsail-nginx-configuration
              #:listen (list (string-append "127.0.0.1:" (number->string port)))
              #:moonraker-address backend #:webcams (make-list 4 backend)
-             #:config-file custom-config))
+              #:config-file custom-config))
    (run-directory (string-append temporary "/run"))
    (log-directory (string-append temporary "/logs"))))
 (define checked-default
@@ -66,6 +68,10 @@
    (inherit default)
    (run-directory (nginx-configuration-run-directory runtime))
    (log-directory (nginx-configuration-log-directory runtime))))
+(test-assert "default nginx configuration has no config.json alias"
+  (not (string-contains (call-with-input-file (realize (config-file checked-default))
+                                             get-string-all)
+                        "mainsail-config.json")))
 (test-assert "installed release and actual nginx configuration serve and proxy correctly"
   (zero? (system*
           (realize (file-append (@ (gnu packages python) python) "/bin/python3"))

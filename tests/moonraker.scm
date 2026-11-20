@@ -79,11 +79,17 @@
          (member "/var/lib/moonraker" (cadr form))
          (member '(list "HOME=/var/lib/moonraker") form))))
 (define custom-file "/etc/moonraker/custom.conf")
-(test-assert "runtime configuration is included from its original location"
-  (string-contains
-   (read-text (realize (moonraker-config-file
-                       (moonraker-configuration (config-file custom-file)))))
-   (string-append "[include " custom-file "]")))
+(test-assert "named configuration tree preserves nested paths and runtime targets"
+  (let* ((base (plain-file "base.conf" "[include conf.d/custom.conf]\n"))
+         (config (moonraker-configuration
+                  (config-files (list (cons "conf.d/custom.conf" custom-file)
+                                      (cons "moonraker.conf" base)))))
+         (wrapper (realize (moonraker-config-file config)))
+         (tree (string-append (dirname wrapper) "/config")))
+    (and (string-prefix? "[include config/moonraker.conf]\n\n[machine]\n"
+                         (read-text wrapper))
+         (string=? (plain-file-content base) (read-text (string-append tree "/moonraker.conf")))
+         (string=? custom-file (readlink (string-append tree "/conf.d/custom.conf"))))))
 (test-equal "normalized data directory is used at startup" "/srv/moonraker"
   (let* ((config (moonraker-configuration
                   (data-directory "//srv//moonraker///")))
@@ -101,10 +107,17 @@
      (shepherd (moonraker-configuration (data-directory "/srv/printer")
                                         (klipper-state-directory path)))))
  '("//srv//printer/" "/srv/printer/config" "/srv"))
-(test-error "relative configuration path is rejected" #t
-  (shepherd (moonraker-configuration (config-file "moonraker.conf"))))
+(for-each
+ (lambda (files)
+   (test-error "reject non-list, empty or unsafe configuration files" #t
+     (shepherd (moonraker-configuration (config-files files)))))
+ '("/etc/moonraker.conf" () ("moonraker.conf") (("extra.conf" . "/etc/extra.conf"))
+   (("moonraker.conf" . "relative.conf")) (("moonraker.conf" . #f))
+   (("moonraker.conf" . "/etc/a.conf") ("../escape.conf" . "/etc/b.conf"))
+   (("moonraker.conf" . "/etc/a.conf") ("moonraker.conf" . "/etc/b.conf"))))
 (test-assert "runtime configuration path need not exist on the build host"
-  (shepherd (moonraker-configuration (config-file "/run/secrets/moonraker.conf"))))
+   (shepherd (moonraker-configuration
+              (config-files '(("moonraker.conf" . "/run/secrets/moonraker.conf"))))))
 (test-assert "generated configuration selects Shepherd with canonical policy and helper"
   (let ((text (read-text (realize (moonraker-config-file default)))))
     (and (string-contains text "provider: shepherd")
@@ -156,8 +169,6 @@
    (test-error (format #f "reject invalid power permissions ~s" actions) #t
      (moonraker-shepherd-policy (moonraker-configuration (power-actions actions)))))
  '((poweroff poweroff) (eval) #f))
-(test-error "reject include glob patterns in runtime configuration paths" #t
-  (moonraker-config-file (moonraker-configuration (config-file "/etc/*.conf"))))
 (test-assert "activation and its build helper lower to a derivation"
   (with-store store
     (run-with-store store
@@ -182,7 +193,8 @@
               (services (append
                          (list (service klipper-service-type
                                         (klipper-configuration
-                                         (config-file (plain-file "printer.cfg" ""))))
+                                          (config-files (list (cons "printer.cfg"
+                                                                    (plain-file "seed.cfg" ""))))))
                                (service moonraker-service-type)
                                (service dhcpcd-service-type))
                          %base-services))))
@@ -197,7 +209,11 @@
 (mkdir runtime-directory #o700)
 (define runtime-config
   (moonraker-configuration
-   (config-file (string-append runtime-directory "/application.conf"))
+    (config-files
+     (list (cons "parts/override.conf" (string-append runtime-directory "/override.conf"))
+           (cons "moonraker.conf" (string-append runtime-directory "/application.conf"))
+           (cons "parts/authorization.conf"
+                 (plain-file "auth.conf" "[authorization]\ntrusted_clients: 127.0.0.1/32\n"))))
    (shepherd-socket (string-append runtime-directory "/socket"))
    (power-actions '())))
 (test-assert "installed Moonraker and helper manage private Shepherd using generated configuration"

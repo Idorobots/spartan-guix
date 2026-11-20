@@ -41,15 +41,20 @@
              (name (passwd:name user))
              (state (string-append directory "/klipper"))
              (run (string-append directory "/run"))
-             (data (string-append directory "/moonraker"))
-             (config (string-append state "/printer.cfg"))
+              (data (string-append directory "/moonraker"))
+              (config (string-append state "/printer.cfg"))
+              (fragment (string-append state "/config.d/macros.cfg"))
              (klipper
               (activation-wrapper
                ((@@ (spartan services klipper) klipper-activation)
                 (klipper-configuration
                  (state-directory (string-append directory "//klipper/"))
                  (run-directory run)
-                 (config-file (plain-file "printer.cfg" "initial printer settings\n")))
+                  (config-files
+                   (list (cons "config.d/macros.cfg"
+                               (plain-file "source-macros.cfg" "initial macro settings\n"))
+                         (cons "printer.cfg"
+                               (plain-file "source-printer.cfg" "[include config.d/macros.cfg]\n")))))
                 #:user name)))
              (moonraker
               (activation-wrapper
@@ -69,16 +74,29 @@
                                  (= (stat:perms info) #o750))))
                         (list data (string-append data "/logs"))))))
         (test-equal "generated Klipper activation seeds the configuration"
-          "initial printer settings\n"
-          (begin (invoke klipper) (read-text config)))
-        (test-equal "repeated activation preserves the existing configuration"
-          "calibrated settings\n"
-          (begin
-            (call-with-output-file config
-              (lambda (port) (display "calibrated settings\n" port)))
-            (invoke klipper)
-            (invoke moonraker)
-            (read-text (string-append data "/config/printer.cfg"))))))
+           "[include config.d/macros.cfg]\n"
+           (begin (invoke klipper) (read-text config)))
+         (test-equal "relative fragment is writable and visible through Moonraker"
+           '("initial macro settings\n" #o640)
+           (list (read-text (string-append data "/config/config.d/macros.cfg"))
+                 (stat:perms (stat fragment))))
+         (test-equal "repeated activation preserves calibration and fragment edits"
+           '("calibrated settings\n" "edited macros\n")
+           (begin
+             (call-with-output-file config
+               (lambda (port) (display "calibrated settings\n" port)))
+             (call-with-output-file fragment
+               (lambda (port) (display "edited macros\n" port)))
+             (invoke klipper)
+             (invoke moonraker)
+             (list (read-text (string-append data "/config/printer.cfg"))
+                   (read-text fragment))))
+         (test-equal "activation restores only the missing fragment"
+           '("calibrated settings\n" "initial macro settings\n")
+           (begin
+             (delete-file fragment)
+             (invoke klipper)
+             (list (read-text config) (read-text fragment))))))
     (lambda () (delete-file-recursively directory))))
 (test-end "printer-activation")
 (exit (zero? (test-runner-fail-count runner)))

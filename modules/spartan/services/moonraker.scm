@@ -8,10 +8,11 @@
   #:use-module (guix records)
   #:use-module (spartan packages moonraker)
   #:use-module (spartan packages moonraker-provider-shepherd)
+  #:use-module (spartan services config-files)
   #:use-module (srfi srfi-1)
   #:export (%moonraker-default-config
             moonraker-configuration moonraker-configuration?
-            moonraker-configuration-package moonraker-configuration-config-file
+            moonraker-configuration-package moonraker-configuration-config-files
             moonraker-configuration-data-directory
             moonraker-configuration-klipper-state-directory
             moonraker-configuration-managed-services
@@ -30,8 +31,8 @@
 (define-record-type* <moonraker-configuration>
   moonraker-configuration make-moonraker-configuration moonraker-configuration?
   (package moonraker-configuration-package (default moonraker))
-  (config-file moonraker-configuration-config-file
-               (default %moonraker-default-config))
+  (config-files moonraker-configuration-config-files
+                (default (list (cons "moonraker.conf" %moonraker-default-config))))
   (data-directory moonraker-configuration-data-directory
                   (default "/var/lib/moonraker"))
   (klipper-state-directory moonraker-configuration-klipper-state-directory
@@ -97,6 +98,11 @@
       (error "Moonraker directory must be a writable service directory" field path))
     normalized))
 
+(define (moonraker-config-source? source)
+  (or (file-like? source)
+      (and (string? source) (string-prefix? "/" source)
+           (not (string-index source #\nul)))))
+
 (define (validate-moonraker-configuration config)
   (let ((data (normalize-moonraker-directory
                'data-directory (moonraker-configuration-data-directory config)))
@@ -110,19 +116,11 @@
               (string-prefix? (string-append state "/") data))
       (error "Moonraker data-directory and klipper-state-directory must not overlap"
              data state))
-    (validate-moonraker-config-file (moonraker-configuration-config-file config))
+    (validate-config-files 'moonraker (moonraker-configuration-config-files config)
+                           #:entry-point "moonraker.conf" #:source? moonraker-config-source?)
     (validate-management-configuration config)
     (moonraker-configuration
      (inherit config) (data-directory data) (klipper-state-directory state))))
-
-(define (validate-moonraker-config-file file)
-  (unless (or (file-like? file)
-              (and (string? file) (string-prefix? "/" file)
-                   (not (string-any
-                         (lambda (char)
-                           (memv char '(#\newline #\return #\[ #\] #\* #\?)))
-                         file))))
-    (error "Moonraker config-file must be file-like or an absolute path" file)))
 
 (define (moonraker-shepherd-policy config)
   "Return the immutable management policy for CONFIG."
@@ -136,21 +134,29 @@
                           (power . ,(moonraker-configuration-power-actions config)))))))
 
 (define (moonraker-config-file config)
-  "Compose CONFIG's application file with its generated machine settings."
-  (let ((config (validate-moonraker-configuration config)))
-    ;; Includes retain the original file's directory for relative includes and
-    ;; can refer to a runtime file. The final machine section is authoritative.
-    (mixed-text-file
-     "moonraker.conf"
-     "[include " (moonraker-configuration-config-file config) "]\n\n"
-     "[machine]\nprovider: shepherd\nvalidate_service: False\nvalidate_config: False\n"
-     "shepherd_helper: " (file-append moonraker-provider-shepherd
-                                    "/bin/moonraker-shepherd") "\n"
-     "shepherd_policy: " (moonraker-shepherd-policy config) "\n"
-     "shepherd_sudo: /run/privileged/bin/sudo\n"
-     "shepherd_timeout: "
-     (number->string
-      (exact->inexact (moonraker-configuration-shepherd-timeout config))) "\n")))
+  "Return the generated entry point beside CONFIG's named application tree."
+  (let* ((config (validate-moonraker-configuration config))
+         (wrapper (mixed-text-file
+                   "moonraker.conf"
+                   "[include config/moonraker.conf]\n\n"
+                   "[machine]\nprovider: shepherd\nvalidate_service: False\nvalidate_config: False\n"
+                   "shepherd_helper: " (file-append moonraker-provider-shepherd
+                                                   "/bin/moonraker-shepherd") "\n"
+                   "shepherd_policy: " (moonraker-shepherd-policy config) "\n"
+                   "shepherd_sudo: /run/privileged/bin/sudo\n"
+                   "shepherd_timeout: "
+                   (number->string
+                    (exact->inexact (moonraker-configuration-shepherd-timeout config))) "\n"))
+         ;; Moonraker resolves relative includes from the path used to open
+         ;; each file, so the tree works even with runtime symlink targets.
+         (tree (file-union
+                "moonraker-config"
+                (cons (list "moonraker.conf" wrapper)
+                      (map (lambda (entry) (list (string-append "config/" (car entry))
+                                                 (cdr entry)))
+                           (moonraker-configuration-config-files config)))
+                #:dangling-symlinks? #t)))
+    (file-append tree "/moonraker.conf")))
 
 (define* (moonraker-sudoers-file config #:optional (base %sudoers-specification))
   "Compose BASE sudoers with exact helper permissions derived from CONFIG."

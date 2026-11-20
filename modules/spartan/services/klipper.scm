@@ -7,9 +7,10 @@
   #:use-module (guix records)
   #:use-module (guix modules)
   #:use-module (spartan packages klipper)
+  #:use-module (spartan services config-files)
   #:use-module (srfi srfi-1)
   #:export (klipper-configuration klipper-configuration?
-            klipper-configuration-package klipper-configuration-config-file
+            klipper-configuration-package klipper-configuration-config-files
             klipper-configuration-state-directory klipper-configuration-run-directory
             klipper-configuration-firmware-workspace?
             klipper-configuration-shepherd-requirement klipper-service-type))
@@ -17,7 +18,7 @@
 (define-record-type* <klipper-configuration>
   klipper-configuration make-klipper-configuration klipper-configuration?
   (package klipper-configuration-package (default klipper))
-  (config-file klipper-configuration-config-file)
+  (config-files klipper-configuration-config-files)
   (state-directory klipper-configuration-state-directory
                    (default "/var/lib/klipper"))
   (run-directory klipper-configuration-run-directory (default "/run/klipper"))
@@ -48,6 +49,8 @@
     (unless (boolean? (klipper-configuration-firmware-workspace? config))
       (error "Klipper firmware-workspace? must be a boolean"
              (klipper-configuration-firmware-workspace? config)))
+    (validate-config-files 'klipper (klipper-configuration-config-files config)
+                           #:entry-point "printer.cfg" #:reserved '("klippy.log"))
     (klipper-configuration
      (inherit config)
      (state-directory state)
@@ -57,7 +60,11 @@
   (let* ((config (validate-klipper-configuration config))
          (state (klipper-configuration-state-directory config))
          (run (klipper-configuration-run-directory config))
-         (seed (klipper-configuration-config-file config))
+         (files (klipper-configuration-config-files config))
+         (entry (assoc "printer.cfg" files))
+         ;; Publish the entry point last on a fresh install.
+         (seeds (map (lambda (seed) #~(cons #$(car seed) #$(cdr seed)))
+                     (append (delq entry files) (list entry))))
          (firmware-source
           (and (klipper-configuration-firmware-workspace? config)
                (file-append (klipper-configuration-package config)
@@ -73,7 +80,7 @@
               #~(begin
                   (use-modules (spartan build klipper))
                   (let ((account (getpwnam #$user)))
-                    (initialize-klipper-state #$state #$run #$seed
+                     (initialize-klipper-state #$state #$run (list #$@seeds)
                                               (passwd:uid account)
                                               (passwd:gid account)
                                               #:firmware-source #$firmware-source)))))))

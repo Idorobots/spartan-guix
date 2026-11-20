@@ -122,15 +122,19 @@ flashing tools. Supply a printer-specific configuration to the Shepherd service:
 
 (service klipper-service-type
          (klipper-configuration
-          (config-file (local-file "printer.cfg"))
+          (config-files (list (cons "printer.cfg" (local-file "printer.cfg"))
+                              (cons "config.d/macros.cfg" (local-file "macros.cfg"))))
           (firmware-workspace? #t)))
 #+end_src
 
-The seed is copied once to =/var/lib/klipper/printer.cfg=. Reconfiguration
-preserves it, including =SAVE_CONFIG= calibration; update the declarative seed
-yourself when retaining those changes. Provision included files beside the
-runtime configuration. Klippy runs as =klipper= with =dialout= access; arrange
-the board's device permissions on the host.
+=config-files= is an alist of =(relative-path . file-like)= pairs seeded below
+the writable state directory. It must contain =printer.cfg=; its position in
+the alist doesn't matter. Add =[include config.d/macros.cfg]= to =printer.cfg=
+to load the example fragment; Klipper's include lines control load order.
+Destinations must be unique, with no empty, =.=, or =..= path components, and
+cannot conflict with =klippy.log=. Activation copies only missing files and
+preserves edits and =SAVE_CONFIG= calibration. Klippy runs as =klipper= with
+=dialout= access; arrange the board's device permissions on the host.
 
 - =state-directory=: =/var/lib/klipper=; holds the configuration and log.
 - =run-directory=: =/run/klipper=; holds =klippy.sock= and the =printer= PTY.
@@ -189,7 +193,7 @@ Klipper leaves the API available. Do not add =klipper= to its
 
 | Setting | Default / use |
 |---------+---------------|
-| =config-file= | =%moonraker-default-config=; override with a file-like object or absolute runtime path without globs. |
+| =config-files= | Alist of relative names to file-like objects or absolute runtime paths. Requires =moonraker.conf=, which defaults to =%moonraker-default-config=. |
 | =data-directory= | =/var/lib/moonraker=; uploads, logs, database and communications, owned by =klipper= with mode =0750=. |
 | =klipper-state-directory= | =/var/lib/klipper=; linked as the API's writable =config= directory. |
 | =managed-services= | ='(("klipper" start stop restart) ("moonraker" restart))=; complete service/action allowlist. |
@@ -204,12 +208,14 @@ private, loopback and link-local networks, including IPv6 unique-local addresses
 Trusted clients have full API access. Forwarded client-IP headers are disabled;
 OctoPrint compatibility is enabled and object preprocessing is disabled.
 
-The service includes the application file from its original location, then adds
-an immutable =[machine]= section selecting Shepherd, canonical helper/policy
-paths and disabled installation validators. These settings override matching
-application options. Relative includes remain relative to the original file;
-use a recursive =local-file= with =file-append= for a store-backed configuration
-tree. Provision runtime files before startup. Keep =update_manager= disabled.
+The service lays out the named files in a store directory and loads
+=moonraker.conf= from that tree. Use native includes such as
+=[include conf.d/authorization.conf]= to load other entries. Relative includes
+resolve from the including file's named location in the tree; later includes
+override earlier settings. The generated wrapper adds its authoritative
+=[machine]= settings after the application configuration. Don't include the
+same file twice. Provision absolute runtime sources before startup and add the
+appropriate Shepherd prerequisite if needed. Keep =update_manager= disabled.
 
 Reconfiguration preserves uploads, database and calibration and does not replace
 an unmanaged =config= directory. Data and printer-state paths must be absolute,
@@ -287,8 +293,8 @@ Other keywords: =#:package= (provides =share/mainsail=), =#:listen= (default
 ='("80 default_server")=), =#:moonraker-address= (default ="127.0.0.1:7125"=)
 and =#:gzip?= (default =#t=). =#:server-name= defaults to ='("_")=; add
 ="[::]:80 default_server"= to the listener list for IPv6. An empty =#:webcams=
-list omits camera routes. =#:config-file= serves a file-like JSON override
-without changing the package; =#f= uses upstream defaults.
+list omits camera routes. =#:config-file= serves one file-like JSON override
+as =/config.json=. The default, =#f=, serves the package's upstream file.
 
 The result is a normal =nginx-configuration= record. Inherit it for global
 settings; retain its server/upstream blocks and WebSocket map when combining
