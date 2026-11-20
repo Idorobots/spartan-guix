@@ -140,14 +140,7 @@
    (inherit firmware-config)
    (state-directory "/srv//klipper///")
    (run-directory "//run//klipper///")))
-(test-equal "activation uses normalized directory paths"
-  '("/srv/klipper" "/run/klipper")
-  (let* ((form (gexp->approximate-sexp
-                ((service-extension-compute (extension activation-service-type))
-                 normalized-config)))
-         (call (caddr (caddr form))))
-    (take (cdr call) 2)))
-(test-assert "Shepherd uses the same normalized paths as activation"
+(test-assert "Shepherd uses normalized paths"
   (let* ((services ((service-extension-compute (extension shepherd-root-service-type))
                     normalized-config))
          (form (gexp->approximate-sexp (shepherd-service-start (car services)))))

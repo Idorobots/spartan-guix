@@ -178,17 +178,27 @@
     ;; system's sudoers-file builder validates this composition with visudo.
     (mixed-text-file "sudoers" "@include " base "\n@include " rules "\n")))
 
-(define (moonraker-activation config)
+(define* (moonraker-activation config #:key (user "klipper"))
   (let* ((config (validate-moonraker-configuration config))
          (data (moonraker-configuration-data-directory config))
-         (state (moonraker-configuration-klipper-state-directory config)))
-    (with-imported-modules (source-module-closure '((spartan build moonraker)))
-      #~(begin
-          (use-modules (spartan build moonraker))
-          (let ((account (getpwnam "klipper")))
-            (initialize-moonraker-state #$data #$state
-                                        (passwd:uid account)
-                                        (passwd:gid account)))))))
+         (state (moonraker-configuration-klipper-state-directory config))
+         ;; Guix's default closure selector only includes Guix's own modules.
+         (script
+          (program-file "moonraker-activate"
+            (with-imported-modules
+                (source-module-closure '((spartan build moonraker))
+                                       #:select? (lambda (module)
+                                                   (memq (car module)
+                                                         '(spartan guix gnu))))
+              #~(begin
+                  (use-modules (spartan build moonraker))
+                  (let ((account (getpwnam #$user)))
+                    (initialize-moonraker-state #$data #$state
+                                                (passwd:uid account)
+                                                (passwd:gid account))))))))
+    #~(begin
+        (use-modules (guix build utils))
+        (invoke #$script))))
 
 (define (moonraker-shepherd-services config)
   (let* ((config (validate-moonraker-configuration config))

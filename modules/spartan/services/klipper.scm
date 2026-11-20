@@ -53,7 +53,7 @@
      (state-directory state)
      (run-directory run))))
 
-(define (klipper-activation config)
+(define* (klipper-activation config #:key (user "klipper"))
   (let* ((config (validate-klipper-configuration config))
          (state (klipper-configuration-state-directory config))
          (run (klipper-configuration-run-directory config))
@@ -61,15 +61,25 @@
          (firmware-source
           (and (klipper-configuration-firmware-workspace? config)
                (file-append (klipper-configuration-package config)
-                            "/share/klipper"))))
-    (with-imported-modules (source-module-closure '((spartan build klipper)))
-      #~(begin
-          (use-modules (spartan build klipper))
-          (let ((account (getpwnam "klipper")))
-            (initialize-klipper-state #$state #$run #$seed
-                                      (passwd:uid account)
-                                      (passwd:gid account)
-                                      #:firmware-source #$firmware-source))))))
+                             "/share/klipper")))
+         ;; Guix's default closure selector only includes Guix's own modules.
+         (script
+          (program-file "klipper-activate"
+            (with-imported-modules
+                (source-module-closure '((spartan build klipper))
+                                       #:select? (lambda (module)
+                                                   (memq (car module)
+                                                         '(spartan guix gnu))))
+              #~(begin
+                  (use-modules (spartan build klipper))
+                  (let ((account (getpwnam #$user)))
+                    (initialize-klipper-state #$state #$run #$seed
+                                              (passwd:uid account)
+                                              (passwd:gid account)
+                                              #:firmware-source #$firmware-source)))))))
+    #~(begin
+        (use-modules (guix build utils))
+        (invoke #$script))))
 
 (define (klipper-shepherd-services config)
   (let* ((config (validate-klipper-configuration config))
