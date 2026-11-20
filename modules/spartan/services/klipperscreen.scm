@@ -1,10 +1,37 @@
 (define-module (spartan services klipperscreen)
   #:use-module (gnu packages xorg)
+  #:use-module (gnu services)
   #:use-module (gnu services base)
+  #:use-module (gnu services desktop)
   #:use-module (gnu services xorg)
+  #:use-module (gnu system pam)
   #:use-module (guix gexp)
   #:use-module (spartan packages klipperscreen)
-  #:export (klipperscreen-xorg-session))
+  #:export (elogind-for-greetd-service-type
+            klipperscreen-xorg-session))
+
+(define elogind-for-greetd-service-type
+  (service-type
+   (inherit elogind-service-type)
+   (name 'elogind-for-greetd)
+   (extensions
+    (map (lambda (extension)
+           (if (eq? pam-root-service-type (service-extension-target extension))
+               (service-extension
+                pam-root-service-type
+                (lambda (config)
+                  (map (lambda (pam)
+                         (pam-extension
+                          (transformer
+                           (lambda (service)
+                             (if (string=? "greetd" (pam-service-name service))
+                                 ((pam-extension-transformer pam) service)
+                                 service)))))
+                       ((service-extension-compute extension) config))))
+               extension))
+         (service-type-extensions elogind-service-type)))
+   (description "Run elogind for greetd without making other PAM services
+depend on it.  Configure greetd to start after the @code{elogind} service.")))
 
 (define* (klipperscreen-xorg-session #:key (package klipperscreen)
                                     (xorg (xorg-configuration
