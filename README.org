@@ -136,6 +136,16 @@ cannot conflict with =klippy.log=. Activation copies only missing files and
 preserves edits and =SAVE_CONFIG= calibration. Klippy runs as =klipper= with
 =dialout= access; arrange the board's device permissions on the host.
 
+The =mainsail-config= package from =(spartan packages mainsail)= provides the
+upstream Klipper macros. Add the following pair to =config-files= and put
+=[include mainsail.cfg]= in =printer.cfg= before any local overrides (such as the
+=[virtual_sdcard]= path). Remove any bootstrap macro definitions the include
+replaces. Activation seeds a writable copy; package upgrades do not overwrite it.
+
+#+begin_src scheme
+(cons "mainsail.cfg" (file-append mainsail-config "/share/mainsail-config/mainsail.cfg"))
+#+end_src
+
 - =state-directory=: =/var/lib/klipper=; holds the configuration and log.
 - =run-directory=: =/run/klipper=; holds =klippy.sock= and the =printer= PTY.
 - =firmware-workspace?=: default =#f=. Enables a writable source/tools copy at

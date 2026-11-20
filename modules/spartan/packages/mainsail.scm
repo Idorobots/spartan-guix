@@ -3,6 +3,7 @@
   #:use-module (guix build-system copy)
   #:use-module (guix download)
   #:use-module (guix gexp)
+  #:use-module (guix git-download)
   #:use-module ((guix licenses) #:prefix license:)
   #:use-module (guix packages))
 
@@ -70,4 +71,30 @@ editing, temperature graphs, print history and webcam views.  This package
 installs the official pre-built release in share/mainsail for a web server to
 serve.  The frontend runs in the browser and needs no Node.js runtime on the
 printer host.")
+    (license license:gpl3)))
+
+(define-public mainsail-config
+  (package
+    (name "mainsail-config")
+    (version "1.2.1")
+    (source
+     (origin
+       (method git-fetch)
+       (uri (git-reference
+             (url "https://github.com/mainsail-crew/mainsail-config.git")
+             (commit "e57810d51b5c634aadaca4db923bfcba269ae4b3")))
+       (file-name (git-file-name name version))
+       (sha256
+        (base32 "1x0g1kqbjg50pf8kgxhq9r4n6fn72f288l1a5k06c7ncjl3lb1vj"))))
+    (build-system copy-build-system)
+    (arguments
+     (list #:install-plan
+           #~`(("client.cfg" "share/mainsail-config/")
+               ("mainsail.cfg" "share/mainsail-config/")
+               ("README.md" ,(string-append "share/doc/" #$name "-" #$version "/")))))
+    (home-page "https://github.com/mainsail-crew/mainsail-config")
+    (synopsis "Klipper configuration and macros for Mainsail")
+    (description "This package provides the upstream Klipper configuration for
+Mainsail, including pause, resume, cancel and print layer macros.  Include
+@file{mainsail.cfg} in a printer configuration to use it.")
     (license license:gpl3)))

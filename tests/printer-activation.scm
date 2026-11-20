@@ -5,6 +5,7 @@
              (guix store)
              (guix gexp)
              (ice-9 textual-ports)
+             (spartan packages mainsail)
              (spartan services klipper)
              (spartan services moonraker)
              (srfi srfi-1)
@@ -41,20 +42,24 @@
              (name (passwd:name user))
              (state (string-append directory "/klipper"))
              (run (string-append directory "/run"))
-              (data (string-append directory "/moonraker"))
-              (config (string-append state "/printer.cfg"))
-              (fragment (string-append state "/config.d/macros.cfg"))
+             (data (string-append directory "/moonraker"))
+             (config (string-append state "/printer.cfg"))
+             (fragment (string-append state "/config.d/macros.cfg"))
+             (mainsail-file (string-append state "/mainsail.cfg"))
              (klipper
               (activation-wrapper
                ((@@ (spartan services klipper) klipper-activation)
                 (klipper-configuration
                  (state-directory (string-append directory "//klipper/"))
-                 (run-directory run)
+                  (run-directory run)
                   (config-files
                    (list (cons "config.d/macros.cfg"
                                (plain-file "source-macros.cfg" "initial macro settings\n"))
                          (cons "printer.cfg"
-                               (plain-file "source-printer.cfg" "[include config.d/macros.cfg]\n")))))
+                               (plain-file "source-printer.cfg" "[include config.d/macros.cfg]\n"))
+                         (cons "mainsail.cfg"
+                               (file-append mainsail-config
+                                            "/share/mainsail-config/mainsail.cfg")))))
                 #:user name)))
              (moonraker
               (activation-wrapper
@@ -76,6 +81,11 @@
         (test-equal "generated Klipper activation seeds the configuration"
            "[include config.d/macros.cfg]\n"
            (begin (invoke klipper) (read-text config)))
+         (test-assert "activation seeds packaged Mainsail macros beside printer.cfg"
+           (and (eq? 'regular (stat:type (lstat mainsail-file)))
+                (string-contains
+                 (read-text (string-append data "/config/mainsail.cfg"))
+                 "[gcode_macro SET_PAUSE_AT_LAYER]")))
          (test-equal "relative fragment is writable and visible through Moonraker"
            '("initial macro settings\n" #o640)
            (list (read-text (string-append data "/config/config.d/macros.cfg"))
