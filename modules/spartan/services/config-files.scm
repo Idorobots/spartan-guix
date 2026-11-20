@@ -1,18 +1,8 @@
 (define-module (spartan services config-files)
   #:use-module (guix gexp)
+  #:use-module (spartan build config-files)
   #:use-module (srfi srfi-1)
   #:export (validate-config-files))
-
-(define (relative-file-name? path)
-  (and (string? path)
-       (not (string-any (lambda (char) (char<? char #\space)) path))
-       (every (lambda (part) (not (member part '("" "." ".."))))
-              (string-split path #\/))))
-
-(define (paths-overlap? a b)
-  (or (string=? a b)
-      (string-prefix? (string-append a "/") b)
-      (string-prefix? (string-append b "/") a)))
 
 (define* (validate-config-files service files #:key entry-point (reserved '())
                                 (source? file-like?))

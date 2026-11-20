@@ -132,15 +132,19 @@ the writable state directory. It must contain =printer.cfg=; its position in
 the alist doesn't matter. Add =[include config.d/macros.cfg]= to =printer.cfg=
 to load the example fragment; Klipper's include lines control load order.
 Destinations must be unique, with no empty, =.=, or =..= path components, and
-cannot conflict with =klippy.log=. Activation copies only missing files and
-preserves edits and =SAVE_CONFIG= calibration. Klippy runs as =klipper= with
-=dialout= access; arrange the board's device permissions on the host.
+cannot conflict with =klippy.log= or the activation manifest
+=.guix-klipper-config-files=. Activation replaces every declared file with a
+writable copy and removes previously managed files dropped from =config-files=.
+Files predating the manifest are tracked once declared and activated. Copy
+any live edits or =SAVE_CONFIG= calibration you want to keep back to the declared
+sources before the next system activation. Klippy runs as =klipper= with =dialout=
+access; arrange the board's device permissions on the host.
 
 The =mainsail-config= package from =(spartan packages mainsail)= provides the
 upstream Klipper macros. Add the following pair to =config-files= and put
 =[include mainsail.cfg]= in =printer.cfg= before any local overrides (such as the
 =[virtual_sdcard]= path). Remove any bootstrap macro definitions the include
-replaces. Activation seeds a writable copy; package upgrades do not overwrite it.
+replaces. Activation refreshes the writable copy from the configured package.
 
 #+begin_src scheme
 (cons "mainsail.cfg" (file-append mainsail-config "/share/mainsail-config/mainsail.cfg"))
@@ -227,7 +231,7 @@ override earlier settings. The generated wrapper adds its authoritative
 same file twice. Provision absolute runtime sources before startup and add the
 appropriate Shepherd prerequisite if needed. Keep =update_manager= disabled.
 
-Reconfiguration preserves uploads, database and calibration and does not replace
+Moonraker activation preserves uploads and the database and does not replace
 an unmanaged =config= directory. Data and printer-state paths must be absolute,
 outside the store and non-overlapping. Match directory/socket overrides to
 Klipper's configuration.

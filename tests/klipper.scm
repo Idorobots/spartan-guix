@@ -25,8 +25,31 @@
 (write-text config-file "calibrated configuration\n")
 (write-text seed "updated seed\n")
 (initialize-klipper-state state run seeds (getuid) (getgid))
-(test-equal "subsequent activation preserves calibration" "calibrated configuration\n"
-  (read-text config-file))
+(test-equal "subsequent activation replaces live edits with the declared configuration"
+  '("updated seed\n" #o640)
+  (list (read-text config-file) (stat:perms (stat config-file))))
+(test-error "a missing declarative source aborts replacement" #t
+  (initialize-klipper-state
+   state run (list (cons "printer.cfg" (string-append test-dir "/missing.cfg")))
+   (getuid) (getgid)))
+(test-equal "a failed replacement leaves the live configuration intact"
+  "updated seed\n" (read-text config-file))
+(define retired (string-append state "/config.d/retired.cfg"))
+(define unmanaged (string-append state "/config.d/local.cfg"))
+(define old-seeds
+  (cons* (cons "config.d/retired.cfg" seed)
+         (cons "old/only.cfg" seed)
+         (cons "other.cfg" seed)
+         seeds))
+(initialize-klipper-state state run old-seeds (getuid) (getgid))
+(write-text unmanaged "keep local config\n")
+(define new-seeds (cons (cons "old" seed) seeds))
+(initialize-klipper-state state run new-seeds (getuid) (getgid))
+(test-assert "reconfiguration removes retired fragments but keeps unmanaged files"
+  (and (not (file-exists? retired))
+       (not (file-exists? (string-append state "/other.cfg")))
+       (string=? "updated seed\n" (read-text (string-append state "/old")))
+       (string=? "keep local config\n" (read-text unmanaged))))
 (define workspace (string-append run "/firmware"))
 (test-assert "firmware workspace is not created by default"
   (not (file-exists? workspace)))
@@ -67,11 +90,11 @@
 (delete-file-recursively run)
 (initialize-klipper-state state run seeds (getuid) (getgid)
                           #:firmware-source firmware-source)
-(test-assert "a cleared runtime directory gets fresh source while printer calibration persists"
+(test-assert "a cleared runtime directory gets fresh firmware and declarative config"
   (and (file-exists? (string-append workspace "/new-source"))
        (not (file-exists? (string-append workspace "/.config")))
        (not (file-exists? (string-append workspace "/out")))
-       (string=? "calibrated configuration\n" (read-text config-file))))
+       (string=? "updated seed\n" (read-text config-file))))
 
 (define outside (string-append test-dir "/outside"))
 (mkdir outside)
@@ -125,7 +148,8 @@
               (cons "config.d" printer-seed))
         (map (lambda (path) (list printer-entry (cons path printer-seed)))
              '("" "/abs.cfg" "config.d/../escape.cfg" "config.d//frag.cfg"
-               "printer.cfg" "printer.cfg/frag.cfg" "klippy.log"))))
+               "printer.cfg" "printer.cfg/frag.cfg" "klippy.log"
+               ".guix-klipper-config-files"))))
 (define (activation-error config)
   (catch 'misc-error
     (lambda ()

@@ -6,6 +6,7 @@
   #:use-module (guix gexp)
   #:use-module (guix records)
   #:use-module (guix modules)
+  #:use-module ((spartan build klipper) #:select (%klipper-config-reserved))
   #:use-module (spartan packages klipper)
   #:use-module (spartan services config-files)
   #:use-module (srfi srfi-1)
@@ -50,7 +51,7 @@
       (error "Klipper firmware-workspace? must be a boolean"
              (klipper-configuration-firmware-workspace? config)))
     (validate-config-files 'klipper (klipper-configuration-config-files config)
-                           #:entry-point "printer.cfg" #:reserved '("klippy.log"))
+                            #:entry-point "printer.cfg" #:reserved %klipper-config-reserved)
     (klipper-configuration
      (inherit config)
      (state-directory state)
@@ -62,7 +63,7 @@
          (run (klipper-configuration-run-directory config))
          (files (klipper-configuration-config-files config))
          (entry (assoc "printer.cfg" files))
-         ;; Publish the entry point last on a fresh install.
+         ;; Install fragments before replacing the entry point.
          (seeds (map (lambda (seed) #~(cons #$(car seed) #$(cdr seed)))
                      (append (delq entry files) (list entry))))
          (firmware-source
@@ -128,4 +129,4 @@
           (service-extension profile-service-type
                              (lambda (config)
                                (list (klipper-configuration-package config))))))
-   (description "Run Klipper with an initially declarative, writable printer configuration.")))
+   (description "Run Klipper with writable configuration restored from its declaration on activation.")))

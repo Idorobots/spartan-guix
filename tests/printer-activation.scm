@@ -90,19 +90,21 @@
            '("initial macro settings\n" #o640)
            (list (read-text (string-append data "/config/config.d/macros.cfg"))
                  (stat:perms (stat fragment))))
-         (test-equal "repeated activation preserves calibration and fragment edits"
-           '("calibrated settings\n" "edited macros\n")
+          (test-equal "repeated activation resets printer.cfg and nested fragments"
+            '("[include config.d/macros.cfg]\n" "initial macro settings\n" #o640 #o640)
            (begin
              (call-with-output-file config
                (lambda (port) (display "calibrated settings\n" port)))
              (call-with-output-file fragment
                (lambda (port) (display "edited macros\n" port)))
              (invoke klipper)
-             (invoke moonraker)
-             (list (read-text (string-append data "/config/printer.cfg"))
-                   (read-text fragment))))
-         (test-equal "activation restores only the missing fragment"
-           '("calibrated settings\n" "initial macro settings\n")
+              (invoke moonraker)
+              (list (read-text (string-append data "/config/printer.cfg"))
+                    (read-text fragment)
+                    (stat:perms (stat config))
+                    (stat:perms (stat fragment)))))
+          (test-equal "activation recreates a missing declared fragment"
+            '("[include config.d/macros.cfg]\n" "initial macro settings\n")
            (begin
              (delete-file fragment)
              (invoke klipper)
