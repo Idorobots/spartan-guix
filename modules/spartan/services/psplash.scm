@@ -50,6 +50,9 @@ display manager."
       (respawn? #f)
       (start #~(make-forkexec-constructor
                 (list #$(file-append psplash "/bin/psplash"))
+                ;; Keep psplash's own diagnostics (e.g. VT/FB errors) off the
+                ;; console; inspect /run/psplash.log instead.
+                #:log-file "/run/psplash.log"
                 #:environment-variables
                 (list #$(string-append "PSPLASH_FIFO_DIR=" fifo-directory))))
       (stop #~(make-kill-destructor)))

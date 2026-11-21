@@ -38,8 +38,9 @@
     (build-system gnu-build-system)
     (arguments
      (list
-      ;; Do not print the banner to the console before the image appears.
-      #:configure-flags #~'("--disable-startup-msg")
+      ;; Do not print the banner to the console before the image appears, and
+      ;; do not draw the progress bar (nothing reports progress here).
+      #:configure-flags #~'("--disable-startup-msg" "--disable-progress-bar")
       #:phases
       #~(modify-phases %standard-phases
           ;; The tarball ships only configure.ac/Makefile.am.
