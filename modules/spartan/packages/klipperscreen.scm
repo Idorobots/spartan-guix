@@ -9,23 +9,39 @@
   #:use-module (gnu packages python-xyz)
   #:use-module (gnu packages xorg)
   #:use-module (guix build-system copy)
+  #:use-module ((guix build-system pyproject) #:select (pypi-uri))
   #:use-module (guix download)
   #:use-module (guix gexp)
+  #:use-module ((guix git-download) #:select (git-version))
   #:use-module ((guix licenses) #:prefix license:)
   #:use-module (guix packages))
+
+(define python-websocket-client/klipperscreen
+  (package
+    (inherit python-websocket-client)
+    (version "1.9.2")
+    (source (origin
+              (method url-fetch)
+              (uri (pypi-uri "websocket_client" version))
+              (sha256
+               (base32 "1l04asw355ppvxlakcgxkxvad1yxjvyii0hj5scqdgj8b1a5gjqg"))))))
+
+;; v0.4.7 sends an empty API key even on trusted connections. Use an
+;; upstream snapshot containing the Moonraker 0.11 fix (issue #1760).
+(define %klipperscreen-commit "a4ef4d2260fc2c733039b7ba2f58fab75ee49ef7")
 
 (define-public klipperscreen
   (package
     (name "klipperscreen")
-    (version "0.4.7")
+    (version (git-version "0.4.7" "1" %klipperscreen-commit))
     (source
      (origin
        (method url-fetch)
        (uri (string-append "https://codeload.github.com/KlipperScreen/KlipperScreen/"
-                           "tar.gz/c5fcc279518e78af90071ee2bf46bf36c007fc16"))
+                            "tar.gz/" %klipperscreen-commit))
        (file-name (string-append name "-" version ".tar.gz"))
        (sha256
-        (base32 "1ym9x3k39x6x5awrkr1c4m7bxa6sz0f0l7l67lck516fyv8lzk02"))))
+         (base32 "0lxb0yqpphmlby1vrqzjmqf6f1bp0h7xh9d1gj2ivv715xfdnk2s"))))
     (build-system copy-build-system)
     (arguments
      (list
@@ -43,8 +59,8 @@
           (add-after 'unpack 'configure-runtime
             (lambda _
               (substitute* "ks_includes/functions.py"
-                (("'libXext\\.so\\.6'")
-                 (string-append "'" #$(file-append libxext "/lib/libXext.so.6") "'")))
+                 (("\"libXext\\.so\\.6\"")
+                  (string-append "\"" #$(file-append libxext "/lib/libXext.so.6") "\"")))
               (substitute* "ks_includes/KlippyGtk.py"
                 (("ks_includes/emptyCursor\\.xbm")
                  (string-append #$output "/share/klipperscreen/ks_includes/emptyCursor.xbm")))
@@ -88,7 +104,7 @@
     (native-inputs (list gettext-minimal))
     (inputs (list bash-minimal gobject-introspection gtk+ libxext python
                   python-jinja2 python-mpv python-psutil python-pycairo
-                  python-pygobject python-requests python-websocket-client
+                   python-pygobject python-requests python-websocket-client/klipperscreen
                   shared-mime-info xset xsetroot))
     (home-page "https://klipperscreen.readthedocs.io/")
     (synopsis "Touchscreen interface for Klipper 3D printers")
