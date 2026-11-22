@@ -23,6 +23,7 @@ services.
 | =(spartan packages moonraker-provider-shepherd)= | =moonraker-provider-shepherd= | MIT-licensed provider, policy-limited Guile helper and Moonraker compatibility patch. |
 | =(spartan packages mainsail)= | =mainsail= | Official pre-built Mainsail web interface. |
 | =(spartan packages nut)= | =nut= | UPS drivers, =upsd= and command-line clients. |
+| =(spartan packages spartan-sensor-mesh)= | =spartan-sensor-mesh=, =spartan-sensor-mesh-ui= | JVM agent and matching web interface. |
 
 =(spartan packages moonraker)= also provides =python-streaming-form-data=
 (incremental uploads), =python-preprocess-cancellation= (G-code object markers)
@@ -94,6 +95,7 @@ in place of its upstream counterpart.
 | =(spartan services moonraker)= | =moonraker-service-type= | Declarative Moonraker configuration and persistent API state. |
 | =(spartan services mainsail)= | =%mainsail-nginx-configuration= | Ready-to-use configuration for Guix's =nginx-service-type=. |
 | =(spartan services nut)= | =upsd-service-type= | Supervised UPS drivers, server configuration and USB permissions. |
+| =(spartan services spartan-sensor-mesh)= | =spartan-sensor-mesh-service-type= | Supervised JVM agent with its web interface. |
 | =(spartan services file-systems)= | =resize-file-system-service-type= | Grow a partition and filesystem at boot. |
 | =(spartan bootloader raspberrypi)= | =u-boot-rpi-arm64-bootloader= | Pi firmware → U-Boot → Extlinux boot chain. |
 | =(spartan bootloader raspberrypi)= | =u-boot-rpi-2-bootloader= | 32-bit Pi 2 v1 firmware → U-Boot → Extlinux boot chain. |
@@ -359,6 +361,35 @@ yourself; replug USB devices if they retain old permissions after deployment.
 In the example, provision the secret with SOPS and grant =nut= access (e.g.
 group =nut=, mode =0640=), or choose another runtime path and prerequisite.
 Inspect the service with =herd status upsd= and query =upsc office@localhost=.
+
+** Spartan Sensor Mesh
+
+Spartan Sensor Mesh 0.1.1 packages the released JVM agent and its matching web
+interface. The agent runs as =ssm= and serves the bundled UI over its REST
+endpoint. By default it uses the =application.conf= shipped in the jar; supply a
+node configuration and optional HOCON override when needed:
+
+#+begin_src scheme
+(use-modules (gnu services) (spartan services spartan-sensor-mesh))
+
+(service spartan-sensor-mesh-service-type
+         (spartan-sensor-mesh-configuration
+          (config-file "/etc/ssm/config.json")
+          (application-config "/etc/ssm/application.conf")
+          (rest-host "127.0.0.1")
+          (rest-port 8080)))
+#+end_src
+
+=config-file= is passed as the agent's first argument. =application-config= is
+exported as =JAVA_TOOL_OPTIONS=-Dconfig.file=...=. The package's UI assets are
+served from =share/spartan-sensor-mesh/data= unless =ui-root= overrides
+=REST_DATA_PATH=. =rest-host= and =rest-port= override the jar defaults.
+
+The service creates the =ssm= account and =/var/lib/spartan-sensor-mesh=, runs
+the agent there, and logs to =/var/lib/spartan-sensor-mesh/shepherd.log=. Set
+=nut= to a NUT package to add its =bin= and =sbin= directories to =PATH= for
+=upsc=; no NUT service is required. Add =shepherd-requirement= for extra
+ordering, or =environment-variables= for additional environment entries.
 
 ** Raspberry Pi systems and images
 
