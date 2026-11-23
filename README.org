@@ -183,7 +183,7 @@ Stop Klippy with =herd stop klipper= before flashing and restart it with
 ** Moonraker
 
 Moonraker 0.11.0 supplies the printer API, uploads, metadata and history. Its
-package includes Shepherd provider 0.1.0 and the compatibility patch. It can be
+package includes Shepherd provider 0.1.1 and the compatibility patch. It can be
 installed independently of Klipper.
 
 Use one configuration object for the service and its exact sudo permissions:

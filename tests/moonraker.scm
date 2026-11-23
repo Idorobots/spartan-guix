@@ -125,7 +125,7 @@
          (string-contains text "validate_config: False")
          (string-contains text (string-append "shepherd_policy: "
                                              (realize (moonraker-shepherd-policy default))))
-         (string-contains text "-moonraker-provider-shepherd-0.1.0/bin/moonraker-shepherd")
+         (string-contains text "-moonraker-provider-shepherd-0.1.1/bin/moonraker-shepherd")
          (not (string-contains text "[update_manager")))))
 (define restricted
   (moonraker-configuration

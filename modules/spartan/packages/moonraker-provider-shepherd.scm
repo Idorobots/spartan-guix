@@ -1,6 +1,8 @@
 ;; SPDX-License-Identifier: MIT
 (define-module (spartan packages moonraker-provider-shepherd)
   #:use-module (gnu packages admin)
+  #:use-module (gnu packages base)
+  #:use-module (gnu packages bash)
   #:use-module (gnu packages guile)
   #:use-module (gnu packages python-build)
   #:use-module (guix build-system pyproject)
@@ -25,7 +27,7 @@
 (define-public moonraker-provider-shepherd
   (package
     (name "moonraker-provider-shepherd")
-    (version "0.1.0")
+    (version "0.1.1")
     (source
      (origin
        (method git-fetch)
@@ -34,7 +36,7 @@
              (commit (string-append "v" version))))
        (file-name (git-file-name name version))
        (sha256
-        (base32 "0p9rh2wnww72q4x4ywr5yi29349x6wfmgsv634ngmmy1av6pxj0d"))))
+        (base32 "1wzdjjbv2gxzk7608yh7lvl2kj7866ilwwbk78x4nkdzpjlzjpv3"))))
     (build-system pyproject-build-system)
     (arguments
      (list
@@ -65,7 +67,8 @@
                 (invoke (string-append #$output "/bin/moonraker-shepherd")
                         (string-append (getcwd) "/examples/policy.scm")
                         "capabilities")))))))
-    (native-inputs (list python-setuptools guile-3.0 guile-json-4 shepherd))
+    (native-inputs (list bash coreutils python-setuptools guile-3.0
+                         guile-json-4 shepherd))
     (home-page "https://github.com/Idorobots/moonraker-provider-shepherd")
     (synopsis "GNU Shepherd machine provider for Moonraker")
     (description
