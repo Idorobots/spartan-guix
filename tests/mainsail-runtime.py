@@ -6,11 +6,14 @@ HTTP, upload and WebSocket forwarding without printer hardware.
 
 import base64
 import gzip
+import grp
 import hashlib
 from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
+import pwd
 import socket
 import subprocess
 import sys
@@ -28,6 +31,42 @@ http = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 for path in ("logs", "run/logs", "run/client_body_temp", "run/proxy_temp",
              "run/fastcgi_temp", "run/uwsgi_temp", "run/scgi_temp"):
     (directory / path).mkdir(parents=True, exist_ok=True)
+
+
+def localize_config(source, target, listen_port):
+    """Make a generated nginx config usable by the unprivileged test.
+
+    Guix's nginx service hardcodes `user nginx nginx;` and the production
+    default listens on port 80.  `nginx -t` binds the configured addresses,
+    which fails for an unprivileged runner.  Keep the generated configuration
+    intact apart from the account and the privileged listener.
+    """
+    try:
+        user = pwd.getpwuid(os.geteuid()).pw_name
+        group = grp.getgrgid(os.getegid()).gr_name
+    except KeyError:
+        user = group = "root"
+    lines = source.read_text().splitlines(keepends=True)
+    replaced_user = False
+    replaced_listen = False
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        indent = line[:len(line) - len(line.lstrip())]
+        if not replaced_user and stripped.startswith("user ") and stripped.endswith(";"):
+            lines[index] = f"{indent}user {user} {group};\n"
+            replaced_user = True
+        elif stripped.startswith("listen "):
+            address = stripped.split()[1].rstrip(";")
+            if address.rsplit(":", 1)[-1] == "80":
+                if replaced_listen:
+                    lines[index] = ""
+                else:
+                    lines[index] = f"{indent}listen 127.0.0.1:{listen_port};\n"
+                    replaced_listen = True
+    if not replaced_user:
+        lines.insert(0, f"user {user} {group};\n")
+    target.write_text("".join(lines))
+    return target
 
 
 def request(path, data=None, headers=None):
@@ -102,9 +141,17 @@ class Backend(BaseHTTPRequestHandler):
 
 
 with (directory / "nginx.log").open("w+") as log:
-    for candidate in (default_config, config):
-        subprocess.run([nginx, "-t", "-p", directory / "run", "-c", candidate],
-                       stdout=log, stderr=log, check=True)
+    default_config = localize_config(default_config, directory / "nginx-default.conf", port)
+    config = localize_config(config, directory / "nginx-runtime.conf", port)
+    try:
+        for candidate in (default_config, config):
+            subprocess.run([nginx, "-t", "-p", directory / "run", "-c", candidate],
+                           stdout=log, stderr=log, check=True)
+    except subprocess.CalledProcessError:
+        log.flush()
+        log.seek(0)
+        print(log.read(), file=sys.stderr)
+        raise
     print("PASS: default and customized nginx configurations pass nginx -t")
     process = subprocess.Popen(
         [nginx, "-p", directory / "run", "-c", config, "-g", "daemon off;"],
