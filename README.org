@@ -29,63 +29,16 @@ services.
 (incremental uploads), =python-preprocess-cancellation= (G-code object markers)
 and =python-periphery= (Linux peripheral I/O).
 
-*** Firmware
+*** Firmware & Device support
+| Module                        | Package                         | Purpose                                                                                                   |
+|-------------------------------+---------------------------------+-----------------------------------------------------------------------------------------------------------|
+| =(spartan packages firmware)= | =linux-firmware-uncompressed=   | Uncompressed version of Nonguix's firmware collection.                                                    |
+| =(spartan packages firmware)= | =rpi3-bluetooth-firmware=       | Debian BCM43430A1 firmware and its Cypress license, with the =BCM43430A1.raspberrypi,3-model-b.hcd= alias |
+| =(spartan system displays)=   | =seeedstudio-7inch-hdmi-config= | Raspberry Pi firmware fragment for Seeed  Studio 7 inch HDMI displays                                     |
 
-=(spartan packages firmware)= provides:
 
-- =linux-firmware-uncompressed=: Nonguix's firmware collection in uncompressed
-  form, including Pi 3 Wi-Fi firmware, board configuration and regulatory data.
-  Suitable for kernels without firmware compression support.
-- =rpi3-bluetooth-firmware=: version-pinned Debian BCM43430A1 firmware and its
-  Cypress license, with the =BCM43430A1.raspberrypi,3-model-b.hcd= alias.
-
-Both install under =lib/firmware/=. Pi 2 and Pi 3 include the uncompressed
-Linux firmware collection; Pi 3 additionally includes its Bluetooth firmware.
-
-*** Seeed Studio 7-inch HDMI display
-
-=(spartan packages displays)= provides =seeedstudio-7inch-hdmi-config=, a
-Raspberry Pi firmware fragment with the panel's 720×1280 timings. Opt in from a
-system definition:
-
-#+begin_src scheme
-(use-modules (gnu system images raspberrypi) (spartan system displays))
-
-(with-seeedstudio-7inch-hdmi-display rpi3-barebones-os
-  #:rotation 270
-  #:extra-config '("display_rotate=3"))
-#+end_src
-
-The helper adds the packaged fragment to the Spartan Raspberry Pi ARM64 boot
-files and includes it from =config.txt=. It disables firmware-generated KMS
-arguments and requests =video=HDMI-A-1:720x1280@60,rotate=270= through Extlinux.
-=#:rotation= accepts 0, 90, 180, or 270 degrees (default 270) and sets Linux's
-=rotate= boot option. Set firmware =display_rotate= explicitly through
-=#:extra-config= if needed. These strings are appended in order after the
-firmware defaults. Use =make-seeedstudio-7inch-hdmi-config= with =#:extra-config=
-to build a customized firmware package directly.
-The settings take effect on the next normal boot. See the [[https://github.com/SeeedDocument/wiki_english/blob/master/docs/720x1280%20HDMI%20IPS%20LCD%20Display.md][Seeed configuration guide]].
-
-*** Compatibility packages
-
-These variants provide cross-build recipe fixes. Select the exported package
-in place of its upstream counterpart.
-
-| Module | Packages | Purpose |
-|--------+----------+---------|
-| =(spartan packages admin)= | =htop/cross-fixed= | Process viewer with sensor dependencies. |
-| =(spartan packages avahi)= | =guile-avahi/without-daemon-tests= | Guile Avahi bindings for builds without a running daemon. |
-| =(spartan packages compression)= | =libcbor/cross-fixed= | CBOR encoding and decoding library. |
-| =(spartan packages dns)= | =isc-bind/cross-fixed= | BIND DNS server and utilities. |
-| =(spartan packages groff)= | =groff/cross-fixed=, =groff-minimal/cross-fixed= | Full and minimal document formatters. |
-| =(spartan packages gtk)= | =pango/cross-fixed= | Text rendering for C consumers; omits introspection metadata. |
-| =(spartan packages linux)= | =alsa-lib/cross-fixed=, =alsa-utils/cross-fixed= | ALSA audio library, utilities and udev rules. |
-| =(spartan packages linux)= | =lm-sensors/cross-fixed= | Hardware sensor tools and libraries. |
-| =(spartan packages maths)= | =gnuplot/cross-fixed= | Plotting and graph generation. |
-| =(spartan packages ntp)= | =ntp/cross-fixed=, =openntpd/cross-fixed= | Clock synchronization; reference NTP retains its HTTPS leap-file helper. |
-| =(spartan packages perl)= | =perl/cross-fixed= | Perl interpreter and headers for XS extensions. |
-| =(spartan packages rrdtool)= | =rrdtool/cross-fixed= | Time-series storage and graphs, including Perl bindings. |
-| =(spartan packages tls)= | =perl-net-ssleay/cross-fixed= | Perl OpenSSL bindings. |
+Pi 2 and Pi 3 images include the uncompressed Linux firmware collection;
+Pi 3 additionally includes its Bluetooth firmware.
 
 *** Services and images
 
@@ -115,6 +68,52 @@ For filesystem growth, reference a filesystem already declared in the host:
 Supports ext2/3/4, Btrfs and bcachefs on plain partitions with adjacent free
 space. Each instance runs after its filesystem is mounted; LVM and multi-device
 filesystems are outside its scope.
+
+*** Compatibility packages
+
+These variants provide cross-build recipe fixes. Select the exported package
+in place of its upstream counterpart.
+
+| Module                           | Packages                                         | Purpose                                                                  |
+|----------------------------------+--------------------------------------------------+--------------------------------------------------------------------------|
+| =(spartan packages admin)=       | =htop/cross-fixed=                               | Process viewer with sensor dependencies.                                 |
+| =(spartan packages avahi)=       | =guile-avahi/without-daemon-tests=               | Guile Avahi bindings for builds without a running daemon.                |
+| =(spartan packages compression)= | =libcbor/cross-fixed=                            | CBOR encoding and decoding library.                                      |
+| =(spartan packages dns)=         | =isc-bind/cross-fixed=                           | BIND DNS server and utilities.                                           |
+| =(spartan packages groff)=       | =groff/cross-fixed=, =groff-minimal/cross-fixed= | Full and minimal document formatters.                                    |
+| =(spartan packages gtk)=         | =pango/cross-fixed=                              | Text rendering for C consumers; omits introspection metadata.            |
+| =(spartan packages linux)=       | =alsa-lib/cross-fixed=, =alsa-utils/cross-fixed= | ALSA audio library, utilities and udev rules.                            |
+| =(spartan packages linux)=       | =lm-sensors/cross-fixed=                         | Hardware sensor tools and libraries.                                     |
+| =(spartan packages maths)=       | =gnuplot/cross-fixed=                            | Plotting and graph generation.                                           |
+| =(spartan packages ntp)=         | =ntp/cross-fixed=, =openntpd/cross-fixed=        | Clock synchronization; reference NTP retains its HTTPS leap-file helper. |
+| =(spartan packages perl)=        | =perl/cross-fixed=                               | Perl interpreter and headers for XS extensions.                          |
+| =(spartan packages rrdtool)=     | =rrdtool/cross-fixed=                            | Time-series storage and graphs, including Perl bindings.                 |
+| =(spartan packages tls)=         | =perl-net-ssleay/cross-fixed=                    | Perl OpenSSL bindings.                                                   |
+| =(spartan packages openjdk)=     | =openjdk-armhf=                                  | ARM Hard Float compatible OpenJDK package.                               |
+
+** Seeed Studio 7-inch HDMI display
+
+=(spartan packages displays)= provides =seeedstudio-7inch-hdmi-config=, a
+Raspberry Pi firmware fragment with the panel's 720×1280 timings. Opt in from a
+system definition:
+
+#+begin_src scheme
+(use-modules (gnu system images raspberrypi) (spartan system displays))
+
+(with-seeedstudio-7inch-hdmi-display rpi3-barebones-os
+  #:rotation 270
+  #:extra-config '("display_rotate=3"))
+#+end_src
+
+The helper adds the packaged fragment to the Spartan Raspberry Pi ARM64 boot
+files and includes it from =config.txt=. It disables firmware-generated KMS
+arguments and requests =video=HDMI-A-1:720x1280@60,rotate=270= through Extlinux.
+=#:rotation= accepts 0, 90, 180, or 270 degrees (default 270) and sets Linux's
+=rotate= boot option. Set firmware =display_rotate= explicitly through
+=#:extra-config= if needed. These strings are appended in order after the
+firmware defaults. Use =make-seeedstudio-7inch-hdmi-config= with =#:extra-config=
+to build a customized firmware package directly.
+The settings take effect on the next normal boot. See the [[https://github.com/SeeedDocument/wiki_english/blob/master/docs/720x1280%20HDMI%20IPS%20LCD%20Display.md][Seeed configuration guide]].
 
 ** Klipper
 

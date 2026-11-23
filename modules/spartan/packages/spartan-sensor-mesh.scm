@@ -7,6 +7,8 @@
   #:use-module (guix gexp)
   #:use-module ((guix licenses) #:prefix license:)
   #:use-module (guix packages)
+  #:use-module (guix utils)
+  #:use-module (spartan packages openjdk)
   #:export (spartan-sensor-mesh spartan-sensor-mesh-ui))
 
 (define %spartan-sensor-mesh-license
@@ -105,7 +107,13 @@ by the agent's REST endpoint and is also installed by the
                 (copy-file (assoc-ref inputs "license")
                            (string-append doc "/LICENSE"))))))))
     (inputs
-     (list bash-minimal openjdk spartan-sensor-mesh-ui))
+     (list bash-minimal
+           (if (string=? "armhf-linux"
+                         (gnu-triplet->nix-system
+                          (or (%current-target-system) (%current-system))))
+               openjdk-armhf
+               openjdk)
+           spartan-sensor-mesh-ui))
     (native-inputs
      `(("license" ,%spartan-sensor-mesh-license)))
     (home-page "https://github.com/Idorobots/spartan-sensor-mesh")
