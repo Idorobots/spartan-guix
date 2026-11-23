@@ -93,6 +93,20 @@
                   (string-append dtbs "/broadcom/bcm2836-rpi-2-b.dtb")))
       (lambda () (delete-file-recursively directory)))))
 
+
+(test-assert "flat kernel DTB layout already satisfies U-Boot's unqualified path"
+  (let* ((directory (mkdtemp "/tmp/spartan-rpi2-flat-dtb-XXXXXX"))
+         (dtbs (string-append directory "/lib/dtbs")))
+    (dynamic-wind
+      (lambda ()
+        (mkdir-p dtbs)
+        (call-with-output-file (string-append dtbs "/bcm2836-rpi-2-b.dtb")
+          (lambda (port) (display "Pi 2 flat DTB" port))))
+      (lambda ()
+        (install-alias #:outputs `(("out" . ,directory)))
+        (file-exists? (string-append dtbs "/bcm2836-rpi-2-b.dtb")))
+      (lambda () (delete-file-recursively directory)))))
+
 (test-error "kernel installation fails when the board DTB is absent" #t
   (let ((directory (mkdtemp "/tmp/spartan-rpi2-missing-dtb-XXXXXX")))
     (dynamic-wind

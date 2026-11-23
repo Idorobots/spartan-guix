@@ -13,15 +13,19 @@
 
 (define install-rpi2-device-tree-alias
   #~(lambda* (#:key outputs #:allow-other-keys)
-      ;; 32-bit RPi U-Boot requests an unqualified fdtfile, whereas current
-      ;; Linux installs ARM DTBs in vendor subdirectories. Keep each
-      ;; generation's DTB with its own kernel for Extlinux.
+      ;; 32-bit RPi U-Boot requests an unqualified fdtfile.  Kernel builds
+      ;; disagree on whether DTBs are installed flat or below their vendor
+      ;; directory, so accept both layouts and only add an alias when needed.
       (with-directory-excursion
           (string-append (assoc-ref outputs "out") "/lib/dtbs")
-        (let ((dtb "broadcom/bcm2836-rpi-2-b.dtb"))
-          (unless (file-exists? dtb)
-            (error "Pi 2 kernel device tree is missing" dtb))
-          (symlink dtb "bcm2836-rpi-2-b.dtb")))))
+        (let ((alias "bcm2836-rpi-2-b.dtb")
+              (vendored "broadcom/bcm2836-rpi-2-b.dtb"))
+          (cond
+           ((file-exists? alias) #t)
+           ((file-exists? vendored) (symlink vendored alias))
+           (else
+            (error "Pi 2 kernel device tree is missing (looked for flat or vendor layout)"
+                   alias vendored)))))))
 
 (define linux-rpi2
   (package
