@@ -16,13 +16,17 @@
 
 (define make-guile-runtime-rewriter
   (memoize
-   (lambda* (#:key (guile-transform identity) (replacements '()) (system %system))
-     "Return an AArch64 runtime rewriter compiling selected packages on SYSTEM.
+   (lambda* (#:key (guile-transform identity) (replacements '()) (system %system)
+                  (runtime-system "aarch64-linux")
+                  (consumers %selective-consumers))
+     "Return a RUNTIME-SYSTEM rewriter compiling selected packages on SYSTEM.
 Apply GUILE-TRANSFORM to each upstream Guile recipe before adaptation.  Apply
 REPLACEMENTS as recipe variants, rewriting their runtime dependencies too.
 No hardware or SDK fixes are enabled by default.  Native cross-build tools
-remain upstream; duplicate Guile inputs of native consumers are aligned."
-     (let ((system (gnu-triplet->nix-system system)))
+remain upstream; duplicate Guile inputs of native consumers are aligned.
+CONSUMERS selects the additional packages to adapt, after recipe rewriting."
+     (let ((system (gnu-triplet->nix-system system))
+           (runtime-system (gnu-triplet->nix-system runtime-system)))
        (define guiles
          (map (lambda (base)
                 (cons base (package-with-compilation-system
@@ -50,7 +54,7 @@ remain upstream; duplicate Guile inputs of native consumers are aligned."
            ;; Adapt only after recipe rewriting: the adapter delegates to the
            ;; underlying recipe and re-evaluates it in the build context.
            (let ((selected (rewrite-package p)))
-             (if (memq p %selective-consumers)
+             (if (memq p consumers)
                  (package-with-compilation-system selected #:system system)
                  selected))))
 
@@ -83,6 +87,6 @@ remain upstream; duplicate Guile inputs of native consumers are aligned."
        (lambda (package)
          ;; Inspect the intended runtime graph even on an x86 image runner.
          ;; Input selection in the resulting recipes remains deferred.
-         (parameterize ((%current-system "aarch64-linux")
+         (parameterize ((%current-system runtime-system)
                         (%current-target-system #f))
            (rewrite package)))))))

@@ -420,6 +420,7 @@ available in =(spartan bootloader raspberrypi)= for custom image initializers.
 | =%rpi-root-file-system=, =%rpi-boot-file-system= | Shared root/boot declarations. |
 | =%rpi-resize-file-system-service= | Root partition/filesystem growth at boot. |
 | =rpi3-package=, =rpi3-guile-fixes= | Pi 3 package adaptation and its Guile transformations. |
+| =rpi2-package=, =rpi4-package= | SDK-only mixed compilation for ARM hard float and AArch64 respectively. |
 
 Build the Pi 3 SD image using the installed channel's =rpi-raw= image type:
 
@@ -470,6 +471,13 @@ Apply recipe changes before wrapping:
 (package-with-compilation-system linux-arm64-generic #:system "x86_64-linux")
 #+end_src
 
+For dependency fixes on a graph, use =make-compilation-package-mapper=.
+Its callback changes one recipe; the returned memoized mapper visits explicit
+and implicit inputs and graft replacements, preserving both outer and nested
+adapters and their compilation platforms. Pass =#:deep? #f= to omit implicit
+inputs. =map-compilation-package= transforms the captured recipe of just one
+adapted package.
+
 *** Guile and dependency transformations
 
 - =(spartan packages guile-snarf)=: =guile-with-native-snarf= adjusts Guile's
@@ -478,16 +486,24 @@ Apply recipe changes before wrapping:
   =pkg-config= for the installed Guile SDK.
 - =(spartan packages guile)=: =make-guile-runtime-rewriter= returns a package
   transformation accepting =#:guile-transform=, =#:replacements= (package pairs)
-  and =#:system=.
+  =#:system= (compilation platform), =#:runtime-system= (default
+  ="aarch64-linux"=), and =#:consumers= (additional packages to adapt).
 
 #+begin_src scheme
 (use-modules (gnu packages guile) (spartan packages guile)
              (spartan packages guile-config) (spartan packages guile-snarf))
 (define with-guile-sdk
   (make-guile-runtime-rewriter
+   #:runtime-system "armhf-linux"
    #:guile-transform (compose guile-with-native-snarf guile-with-native-config)))
 (with-guile-sdk guile-readline)
 #+end_src
+
+The Pi 2, Pi 3 and Pi 4 baselines use this same mechanism for both Guile
+versions, Guix, Shepherd, Guile-SSH and Guile-Readline. The Pi 2 and Pi 4 select
+the SDK-only fixes; the Pi 3 also selects its Cortex-A53 linker fix. Board helpers
+accept an optional =#:system= compilation-platform override. Kernels and
+uncompressed firmware use the compilation adapter directly.
 
 Dependency helpers apply the named compatibility variants to a package's
 dependencies. Import the module and call the helper with a package:

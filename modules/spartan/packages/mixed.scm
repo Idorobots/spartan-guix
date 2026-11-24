@@ -11,7 +11,8 @@
   #:use-module (ice-9 match)
   #:use-module (srfi srfi-1)
   #:export (package-with-compilation-system
-            map-compilation-package))
+            map-compilation-package
+            make-compilation-package-mapper))
 
 ;; Keep recipe transformations inside an adapter: changing the arguments on
 ;; the outer package would leave the recipe captured by its lowerer unchanged.
@@ -24,6 +25,53 @@
      (package-with-compilation-system
       (map-compilation-package transform base) #:system system))
     (#f (transform package))))
+
+(define* (make-compilation-package-mapper transform #:key (deep? #t))
+  "Return a memoized dependency mapper applying TRANSFORM inside adapters.
+TRANSFORM changes a single recipe; explicit dependencies, graft replacements,
+and, when DEEP? is true, implicit build inputs are visited recursively.  Adapted
+packages are unwrapped, mapped and adapted again with their original compilation
+platform.  This keeps recipe fixes inside the lowerer's captured recipe."
+  (define (adapted? package)
+    (hashq-ref %compilation-packages package))
+
+  (define (rewrite-input input)
+    (match input
+      ((label (? package? package) outputs ...)
+       (cons* label (rewrite package) outputs))
+      (_ input)))
+
+  (define (mapped-build-system system)
+    (define lower (build-system-lower system))
+    (build-system
+      (inherit system)
+      (lower
+       (lambda args
+         (let ((lowered (apply lower args)))
+           (bag
+             (inherit lowered)
+             (build-inputs (map rewrite-input (bag-build-inputs lowered)))
+             (host-inputs (map rewrite-input (bag-host-inputs lowered)))
+             (target-inputs (map rewrite-input (bag-target-inputs lowered)))))))))
+
+  ;; Let Guix handle explicit inputs, replacements and memoization.  Its deep
+  ;; mapper would also clone adapted packages *after* our transformation, losing
+  ;; their adapter registration.  Instead handle implicit inputs only on plain
+  ;; recipes, and cut recursion at adapters after mapping their captured recipe.
+  (define rewrite
+    (package-mapping
+     (lambda (package)
+       (if (adapted? package)
+           (map-compilation-package rewrite package)
+           (let ((selected (transform package)))
+             (if deep?
+                 (package/inherit selected
+                   (build-system
+                    (mapped-build-system (package-build-system selected))))
+                 selected))))
+     adapted?
+     #:deep? #f))
+  rewrite)
 
 (define* (native-outputs-available? store package system
                                     #:key (valid? valid-path?)

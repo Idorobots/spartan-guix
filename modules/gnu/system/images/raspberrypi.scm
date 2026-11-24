@@ -28,6 +28,7 @@
             %rpi-resize-file-system-service
             rpi-image-type
             rpi2-image-type
+            rpi2-package
             rpi2-barebones-os
             rpi2-barebones-raw-image
             rpi3-guile-fixes
@@ -35,6 +36,7 @@
             rpi3-barebones-os
             rpi3-barebones-raw-image
             rpi4-image-type
+            rpi4-package
             rpi4-barebones-os
             rpi4-barebones-raw-image))
 
@@ -45,13 +47,22 @@
 (define %rpi-root-label "Guix")
 (define %rpi-boot-label "PIBOOT")
 
+(define %rpi-sdk-guile-fixes
+  (compose guile-with-native-snarf guile-with-native-config))
+
 (define rpi3-guile-fixes
-  (compose guile-with-cortex-a53-fix
-           guile-with-native-snarf
-           guile-with-native-config))
+  (compose guile-with-cortex-a53-fix %rpi-sdk-guile-fixes))
 
 (define %rpi-package-replacements
   `((,guile-avahi . ,guile-avahi/without-daemon-tests)))
+
+(define* (rpi2-package package #:key (system %system))
+  "Apply the Pi 2's SDK fixes and ARM hard-float mixed compilation policy."
+  ((make-guile-runtime-rewriter
+    #:runtime-system "armhf-linux" #:system system
+    #:guile-transform %rpi-sdk-guile-fixes
+    #:replacements %rpi-package-replacements)
+   package))
 
 (define* (rpi3-package package #:key (system %system))
   "Apply the Pi 3's explicit fixes and mixed compilation policy to PACKAGE."
@@ -61,11 +72,13 @@
     #:system system)
    package))
 
-(define rpi4-package
+(define* (rpi4-package package #:key (system %system))
   ;; The Pi 4's Cortex-A72 does not need the Pi 3's Cortex-A53 workaround.
-  (make-guile-runtime-rewriter
-   #:guile-transform (compose guile-with-native-snarf guile-with-native-config)
-   #:replacements %rpi-package-replacements))
+  ((make-guile-runtime-rewriter
+    #:system system
+    #:guile-transform %rpi-sdk-guile-fixes
+    #:replacements %rpi-package-replacements)
+   package))
 
 (define (rpi-essential-services os rewrite-package)
   (modify-services (operating-system-default-essential-services os)
@@ -92,15 +105,21 @@
            (resize-file-system-configuration
              (file-system %rpi-root-file-system))))
 
-(define (rpi-arm64-services rewrite-package)
+(define (rpi-services rewrite-package)
   (cons* (service dhcpcd-service-type)
          (service ntp-service-type)
          %rpi-resize-file-system-service
          (modify-services %base-services
            (guix-service-type config =>
-             (guix-configuration
-              (inherit config)
-              (guix (rewrite-package (guix-configuration-guix config))))))))
+             (let ((guix (rewrite-package (guix-configuration-guix config))))
+               (guix-configuration
+                (inherit config)
+                (guix guix)
+                ;; Keep trust files on the same routed Guix package, rather
+                ;; than pulling a second, unadapted Guix into the image.
+                (authorized-keys
+                 (list (file-append guix "/share/guix/berlin.guix.gnu.org.pub")
+                       (file-append guix "/share/guix/bordeaux.guix.gnu.org.pub")))))))))
 
 ;; Pi 2 Model B v1.0/v1.1: BCM2836, Cortex-A7, 32-bit ARMv7 hard float.
 (define rpi2-barebones-os
@@ -117,6 +136,9 @@
                    %base-firmware))
    ;; multi_v7_defconfig builds the Pi's SD host and ext4 drivers in.
    (initrd-modules '())
+   (packages (map rpi2-package %base-packages))
+   (essential-services
+    (rpi-essential-services this-operating-system rpi2-package))
    (bootloader
     (bootloader-configuration
      (bootloader u-boot-rpi-2-bootloader)
@@ -124,11 +146,7 @@
    (file-systems
     (append (list %rpi-root-file-system %rpi-boot-file-system)
             %base-file-systems))
-   (services
-    (cons* (service dhcpcd-service-type)
-           (service ntp-service-type)
-           %rpi-resize-file-system-service
-           %base-services))))
+   (services (rpi-services rpi2-package))))
 
 (define rpi3-barebones-os
   (operating-system
@@ -172,7 +190,7 @@
    (file-systems
     (append (list %rpi-root-file-system %rpi-boot-file-system)
             %base-file-systems))
-   (services (rpi-arm64-services rpi3-package))))
+   (services (rpi-services rpi3-package))))
 
 (define rpi4-barebones-os
   (operating-system
@@ -185,7 +203,7 @@
    (packages (map rpi4-package %base-packages))
    (essential-services
     (rpi-essential-services this-operating-system rpi4-package))
-   (services (rpi-arm64-services rpi4-package))))
+   (services (rpi-services rpi4-package))))
 
 (define initialize-rpi-boot-partition
   ;; Firmware and U-Boot live on FAT. Guix installs extlinux.conf on root.
