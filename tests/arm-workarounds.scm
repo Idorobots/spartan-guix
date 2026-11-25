@@ -57,6 +57,18 @@
   (with-store store
     (package-derivation store libgpg-error "x86_64-linux" #:graft? #f)))
 
+(define original-aarch64-glib
+  (with-store store
+    (package-derivation store glib "aarch64-linux" #:graft? #f)))
+
+(define original-aarch64-dbus
+  (with-store store
+    (package-derivation store dbus "aarch64-linux" #:graft? #f)))
+
+(define original-aarch64-pam
+  (with-store store
+    (package-derivation store linux-pam "aarch64-linux" #:graft? #f)))
+
 (with-store store
   (parameterize ((%graft? #f))
     (define (lower object system)
@@ -108,18 +120,23 @@
 
     (for-each
      (lambda (system rewrite)
-       (test-equal (string-append system " PAM uses Guix's standard library layout")
-         (derivation-file-name
-          (package-derivation store (rewrite linux-pam) system #:graft? #f))
-         (derivation-file-name (lower linux-pam system)))
-       (test-equal (string-append system " D-Bus uses Guix's standard library layout")
-         (derivation-file-name
-          (package-derivation store (rewrite dbus) system #:graft? #f))
-         (derivation-file-name (lower dbus system)))
        (test-equal (string-append system " sudo stays inside the build for tmpfiles")
          (derivation-file-name
           (package-derivation store (rewrite sudo) system #:graft? #f))
-         (derivation-file-name (lower sudo system))))
+         (derivation-file-name (lower sudo system)))
+       (when (string=? system "armhf-linux")
+         (test-equal "armhf PAM uses Guix's standard library layout"
+           (derivation-file-name
+            (package-derivation store (rewrite linux-pam) system #:graft? #f))
+           (derivation-file-name (lower linux-pam system)))
+         (test-equal "armhf D-Bus uses Guix's standard library layout"
+           (derivation-file-name
+            (package-derivation store (rewrite dbus) system #:graft? #f))
+           (derivation-file-name (lower dbus system)))
+         (test-equal "armhf GLib uses Guix's standard library layout"
+           (derivation-file-name
+            (package-derivation store (rewrite glib) system #:graft? #f))
+           (derivation-file-name (lower glib system)))))
      '("armhf-linux" "aarch64-linux")
      (list armhf aarch64))
 
@@ -129,6 +146,18 @@
     (test-assert "D-Bus's rewritten recipe forces the standard library directory"
       (string-contains (object->string (package-arguments (armhf dbus)))
                        "-Dlibdir=lib"))
+    (test-assert "GLib's armhf recipe forces the standard library directory"
+      (string-contains (object->string (package-arguments (armhf glib)))
+                       "-Dlibdir=lib"))
+    (test-equal "aarch64 PAM retains its original derivation"
+      (derivation-file-name original-aarch64-pam)
+      (derivation-file-name (lower linux-pam "aarch64-linux")))
+    (test-equal "aarch64 D-Bus retains its original derivation"
+      (derivation-file-name original-aarch64-dbus)
+      (derivation-file-name (lower dbus "aarch64-linux")))
+    (test-equal "aarch64 GLib retains its original derivation"
+      (derivation-file-name original-aarch64-glib)
+      (derivation-file-name (lower glib "aarch64-linux")))
     (test-assert "sudo's rewritten recipe uses the sandbox tmpfiles directory"
       (string-contains (object->string (package-arguments (armhf sudo)))
                        "--enable-tmpfiles.d=/tmp/dummy"))))

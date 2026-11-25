@@ -91,18 +91,6 @@
 
 (define (fix-common-package base system)
   (cond
-   ;; The rebuilt D-Bus recipe selects Meson's lib64 default while Guix's
-   ;; RUNPATH validation only expects the standard lib directory.
-   ((and (string=? (package-name base) "dbus")
-         (string=? (package-version base) "1.16.2"))
-    (fix-or-substitute
-     base system
-     (package
-       (inherit base)
-       (arguments
-        (substitute-keyword-arguments (package-arguments base)
-          ((#:configure-flags flags #~'())
-           #~(cons "-Dlibdir=lib" #$flags)))))))
    ;; Sudo 1.9.17p1 defaults its systemd tmpfiles directory to the host's
    ;; /usr/lib/tmpfiles.d; installing there fails in the build sandbox.
    ((and (string=? (package-name base) "sudo")
@@ -126,6 +114,10 @@
        (arguments
         (substitute-keyword-arguments (package-arguments base)
           ((#:parallel-tests? _ #t) #f))))))
+   (else base)))
+
+(define (fix-armhf-package base system)
+  (cond
    ;; Linux-PAM 1.7.2 can select Meson's host-dependent lib64 default while
    ;; Guix's Meson builder adds $output/lib to RUNPATH.
    ((and (string=? (package-name base) "linux-pam")
@@ -138,10 +130,31 @@
         (substitute-keyword-arguments (package-arguments base)
           ((#:configure-flags flags #~'())
            #~(cons "-Dlibdir=lib" #$flags)))))))
-   (else base)))
-
-(define (fix-armhf-package base system)
-  (cond
+   ;; The rebuilt D-Bus recipe selects Meson's lib64 default while Guix's
+   ;; RUNPATH validation only expects the standard lib directory.
+   ((and (string=? (package-name base) "dbus")
+         (string=? (package-version base) "1.16.2"))
+    (fix-or-substitute
+     base system
+     (package
+       (inherit base)
+       (arguments
+        (substitute-keyword-arguments (package-arguments base)
+          ((#:configure-flags flags #~'())
+           #~(cons "-Dlibdir=lib" #$flags)))))))
+   ;; GLib 2.86.0 selects Meson's lib64 default when the build machine and
+   ;; target differ, but its pkg-config phase and Guix RUNPATH validation
+   ;; expect the standard lib directory.
+   ((and (string=? (package-name base) "glib")
+         (string=? (package-version base) "2.86.0"))
+    (fix-or-substitute
+     base system
+     (package
+       (inherit base)
+       (arguments
+        (substitute-keyword-arguments (package-arguments base)
+          ((#:configure-flags flags #~'())
+           #~(cons "-Dlibdir=lib" #$flags)))))))
    ;; libgpg-error 1.61's t-printf test expects %.100Lf with LDBL_MAX to fail.
    ;; armhf has no wider long double, so LDBL_MAX equals DBL_MAX.
    ((and (string=? (package-name base) "libgpg-error")
