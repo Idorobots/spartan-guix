@@ -14,9 +14,13 @@
   #:use-module (gnu services dbus)
   #:use-module (gnu services monitoring)
   #:use-module (gnu services ssh)
+  #:use-module (guix build-system)
   #:use-module (guix gexp)
   #:use-module (guix packages)
+  #:use-module (guix records)
   #:use-module (guix utils)
+  #:use-module ((gnu packages flashing-tools) #:select (genimage))
+  #:use-module ((gnu packages virtualization) #:select (qemu-minimal))
   #:use-module (spartan packages avahi)
   #:use-module (spartan packages cortex-a53)
   #:use-module (spartan packages guile)
@@ -239,6 +243,23 @@
                               #:extra-mixed-packages extra-mixed-packages)
     package)))
 
+(define (native-image-tool-package base)
+  "Force BASE to be built for the runner's native system.
+Image-construction tools are executed by the runner, not by the target OS."
+  (let* ((bs (package-build-system base))
+         (native-bs
+          (build-system
+           (name (build-system-name bs))
+           (description (build-system-description bs))
+           (lower
+            (lambda args
+              (apply (build-system-lower bs)
+                     (append (strip-keyword-arguments '(#:system #:target) args)
+                             (list #:system %system #:target #f))))))))
+    (package
+      (inherit base)
+      (build-system native-bs))))
+
 (define %original-package-lower
   ((@@ (guix gexp) lookup-compiler) libgpg-error))
 (define %original-package-expand
@@ -260,7 +281,17 @@
                          (rewrite-aarch64-packages package))
                         (else package)))
                      system target))
-      expander => %original-package-expand)))
+      expander => %original-package-expand)
+
+    ;; The image builder is executed by the runner.  Guix normally builds its
+    ;; tools for --system, which makes an armhf image assemble its own qemu and
+    ;; genimage under emulation.
+    (module-set! (resolve-module '(gnu packages virtualization))
+                 'qemu-minimal
+                 (native-image-tool-package qemu-minimal))
+    (module-set! (resolve-module '(gnu packages flashing-tools))
+                 'genimage
+                 (native-image-tool-package genimage))))
 
 (define (rewrite-service services type rewrite)
   (map (lambda (s)

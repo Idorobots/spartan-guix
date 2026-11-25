@@ -174,6 +174,15 @@
               "glib")))
         (build-system-name (package-build-system (car native)))))
 
+    (with-store store
+      (test-assert "image builder qemu is built for the runner"
+        (let ((qemu (module-ref (resolve-module '(gnu packages virtualization))
+                                'qemu-minimal)))
+          (not (string=? "armhf-linux"
+                         (derivation-system
+                          (package-derivation store qemu "armhf-linux"
+                                              #:graft? #f)))))))
+
     (test-assert "libxslt retains EXSLT crypto with patched armhf dependencies"
       (let ((xslt (armhf libxslt)))
         (and (lookup-package-input xslt "libgcrypt")
