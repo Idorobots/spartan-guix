@@ -2,6 +2,7 @@
   #:use-module (gnu services)
   #:use-module (gnu system)
   #:use-module ((gnu packages admin) #:select (shepherd-0.10 shepherd-1.0 sudo))
+  #:use-module ((gnu packages freedesktop) #:select (elogind))
   #:use-module ((gnu packages gnupg) #:select (libgpg-error))
   #:use-module ((gnu packages guile) #:select (guile-readline))
   #:use-module ((gnu packages package-management) #:select (guix))
@@ -46,7 +47,8 @@
 (define rpi3-guile-fixes %cortex-guile-fixes)
 
 (define %arm-consumers
-  (list guix shepherd-0.10 shepherd-1.0 guile-ssh guile-readline sudo))
+  (list guix shepherd-0.10 shepherd-1.0 guile-ssh guile-readline sudo
+        elogind))
 
 (define %replacements
   `((,guile-avahi . ,guile-avahi/without-daemon-tests)))
@@ -155,6 +157,26 @@
         (substitute-keyword-arguments (package-arguments base)
           ((#:configure-flags flags #~'())
            #~(cons "-Dlibdir=lib" #$flags)))))))
+   ;; ELogind's raw clone and thread-count tests exercise clone(2) details that
+   ;; 32-bit ARM user emulation does not implement faithfully.
+   ((and (string=? (package-name base) "elogind")
+         (string=? (package-version base) "257.14"))
+    (fix-or-substitute
+     base system
+     (package
+       (inherit base)
+       (arguments
+        (substitute-keyword-arguments (package-arguments base)
+          ((#:phases phases #~%standard-phases)
+           #~(modify-phases #$phases
+               (add-after 'unpack 'skip-qemu-incompatible-tests
+                 (lambda _
+                   (substitute* '("src/test/test-process-util.c"
+                                  "src/test/test-raw-clone.c")
+                     (("DEFINE_TEST_MAIN_WITH_INTRO\\(LOG_INFO, intro\\);")
+                      "int main(void) { return 77; }")
+                     (("DEFINE_TEST_MAIN\\(LOG_INFO\\);")
+                      "int main(void) { return 77; }")))))))))))
    ;; libgpg-error 1.61's t-printf test expects %.100Lf with LDBL_MAX to fail.
    ;; armhf has no wider long double, so LDBL_MAX equals DBL_MAX.
    ((and (string=? (package-name base) "libgpg-error")

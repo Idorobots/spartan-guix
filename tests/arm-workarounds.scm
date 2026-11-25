@@ -1,6 +1,7 @@
 (use-modules (gnu)
              (gnu bootloader grub)
              ((gnu packages admin) #:select (shepherd-1.0 sudo))
+             ((gnu packages freedesktop) #:select (elogind))
              (gnu packages glib)
              (gnu packages gnupg)
              (gnu packages linux)
@@ -11,6 +12,7 @@
              (gnu services dbus)
              (gnu services ssh)
              (gnu system image)
+             (guix build-system)
              (guix derivations)
              (guix gexp)
              (guix grafts)
@@ -111,6 +113,13 @@
     (test-equal "native x86 libgpg-error retains its original derivation"
       (derivation-file-name original-x86)
       (derivation-file-name (lower libgpg-error "x86_64-linux")))
+
+    (test-equal "elogind uses mixed compilation on armhf"
+      'mixed-compilation
+      (build-system-name (package-build-system (rpi2-package elogind))))
+    (test-equal "elogind uses mixed compilation on aarch64"
+      'mixed-compilation
+      (build-system-name (package-build-system (rpi4-package elogind))))
 
     (test-assert "libxslt retains EXSLT crypto with patched armhf dependencies"
       (let ((xslt (armhf libxslt)))
