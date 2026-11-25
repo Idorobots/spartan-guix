@@ -1,8 +1,8 @@
 (define-module (spartan system arm-workarounds)
+  #:use-module (srfi srfi-197)
   #:use-module (gnu services)
   #:use-module (gnu system)
   #:use-module ((gnu packages admin) #:select (shepherd-0.10 shepherd-1.0 sudo))
-  #:use-module ((gnu packages freedesktop) #:select (elogind))
   #:use-module ((gnu packages gnupg) #:select (libgpg-error))
   #:use-module ((gnu packages guile) #:select (guile-readline))
   #:use-module ((gnu packages package-management) #:select (guix))
@@ -12,6 +12,7 @@
   #:use-module (gnu services avahi)
   #:use-module (gnu services base)
   #:use-module (gnu services dbus)
+  #:use-module (gnu services monitoring)
   #:use-module (gnu services ssh)
   #:use-module (guix gexp)
   #:use-module (guix packages)
@@ -22,6 +23,8 @@
   #:use-module (spartan packages guile-config)
   #:use-module (spartan packages guile-snarf)
   #:use-module (spartan packages mixed)
+  #:use-module (spartan services nut)
+  #:use-module (spartan services spartan-sensor-mesh)
   #:export (with-armhf-workarounds
             with-aarch64-workarounds
             rpi2-package
@@ -46,40 +49,46 @@
 
 (define rpi3-guile-fixes %cortex-guile-fixes)
 
-(define %arm-consumers
-  (list guix shepherd-0.10 shepherd-1.0 guile-ssh guile-readline sudo
-        elogind))
+(define %base-mixed-packages
+  (list guix shepherd-0.10 shepherd-1.0 guile-ssh guile-readline sudo))
 
 (define %replacements
   `((,guile-avahi . ,guile-avahi/without-daemon-tests)))
 
-(define* (make-aarch64-sdk-rewriter #:key (cortex-a53? #f) (system %system))
+(define* (make-aarch64-sdk-rewriter #:key (cortex-a53? #f) (system %system)
+                                     (extra-mixed-packages '()))
   (make-guile-runtime-rewriter
    #:runtime-system "aarch64-linux"
    #:system system
    #:guile-transform (if cortex-a53? %cortex-guile-fixes %sdk-guile-fixes)
    #:replacements %replacements
-   #:consumers %arm-consumers))
+   #:consumers (append %base-mixed-packages extra-mixed-packages)))
 
-(define* (make-armhf-sdk-rewriter #:key (system %system))
+(define* (make-armhf-sdk-rewriter #:key (system %system) (extra-mixed-packages '()))
   (make-guile-runtime-rewriter
    #:runtime-system "armhf-linux"
    #:system system
    #:guile-transform %sdk-guile-fixes
    #:replacements %replacements
-   #:consumers %arm-consumers))
+   #:consumers (append %base-mixed-packages extra-mixed-packages)))
 
-(define* (rpi2-package package #:key (system %system))
+(define* (rpi2-package package #:key (system %system) (extra-mixed-packages '()))
   "Apply the Pi 2's SDK fixes and ARM hard-float mixed compilation policy."
-  ((make-armhf-sdk-rewriter #:system system) package))
+  ((make-armhf-sdk-rewriter #:system system
+                            #:extra-mixed-packages extra-mixed-packages)
+   package))
 
-(define* (rpi3-package package #:key (system %system))
+(define* (rpi3-package package #:key (system %system) (extra-mixed-packages '()))
   "Apply the Pi 3's Cortex-A53 and SDK fixes with mixed compilation."
-  ((make-aarch64-sdk-rewriter #:cortex-a53? #t #:system system) package))
+  ((make-aarch64-sdk-rewriter #:cortex-a53? #t #:system system
+                             #:extra-mixed-packages extra-mixed-packages)
+   package))
 
-(define* (rpi4-package package #:key (system %system))
+(define* (rpi4-package package #:key (system %system) (extra-mixed-packages '()))
   ;; The Pi 4's Cortex-A72 does not need the Pi 3's Cortex-A53 workaround.
-  ((make-aarch64-sdk-rewriter #:system system) package))
+  ((make-aarch64-sdk-rewriter #:system system
+                              #:extra-mixed-packages extra-mixed-packages)
+   package))
 
 (define (native-substitute-available? package system)
   "Whether PACKAGE's unpatched native outputs are already available for SYSTEM."
@@ -216,12 +225,18 @@
   (make-compilation-package-mapper
    (lambda (base) (fix-common-package base "aarch64-linux"))))
 
-(define* (armhf-package-rewriter package #:key (system %system))
-  (rewrite-armhf-packages ((make-armhf-sdk-rewriter #:system system) package)))
+(define* (armhf-package-rewriter package #:key (system %system)
+                                       (extra-mixed-packages '()))
+  (rewrite-armhf-packages
+   ((make-armhf-sdk-rewriter #:system system
+                            #:extra-mixed-packages extra-mixed-packages)
+    package)))
 
-(define* (aarch64-package-rewriter package #:key (cortex-a53? #f) (system %system))
+(define* (aarch64-package-rewriter package #:key (cortex-a53? #f) (system %system)
+                                          (extra-mixed-packages '()))
   (rewrite-aarch64-packages
-   ((make-aarch64-sdk-rewriter #:cortex-a53? cortex-a53? #:system system)
+   ((make-aarch64-sdk-rewriter #:cortex-a53? cortex-a53? #:system system
+                              #:extra-mixed-packages extra-mixed-packages)
     package)))
 
 (define %original-package-lower
@@ -263,44 +278,80 @@
    (inherit os)
    (packages (map package-rewriter (operating-system-packages os)))
    (services
-    (let ((services (operating-system-user-services os)))
-      (rewrite-service
-       (rewrite-service
-        (rewrite-service
-         (rewrite-service services dbus-root-service-type
-          (lambda (config)
-            (dbus-configuration
-             (inherit config)
-             (dbus (service-rewriter
-                    ;; dbus-configuration-dbus is not exported.
-                    ((@@ (gnu services dbus) dbus-configuration-dbus) config))))))
-         udev-service-type
-         (lambda (config)
-           (udev-configuration
-            (inherit config)
-            (udev (service-rewriter (udev-configuration-udev config))))))
-        avahi-service-type
-        (lambda (config)
-          (avahi-configuration
+    (chain
+     (operating-system-user-services os)
+     (rewrite-service _ dbus-root-service-type
+      (lambda (config)
+        (dbus-configuration
+         (inherit config)
+         (dbus (service-rewriter
+                ;; dbus-configuration-dbus is not exported.
+                ((@@ (gnu services dbus) dbus-configuration-dbus)
+                 config))))))
+     (rewrite-service _ udev-service-type
+      (lambda (config)
+        (udev-configuration
+         (inherit config)
+         (udev (service-rewriter
+                (udev-configuration-udev config))))))
+     (rewrite-service _ avahi-service-type
+      (lambda (config)
+        (avahi-configuration
+         (inherit config)
+         (avahi (service-rewriter
+                 (avahi-configuration-avahi config))))))
+     (rewrite-service _ openssh-service-type
+      (lambda (config)
+        (openssh-configuration
+         (inherit config)
+         (openssh (service-rewriter
+                   (openssh-configuration-openssh config))))))
+     (rewrite-service _ prometheus-node-exporter-service-type
+      (lambda (config)
+        (prometheus-node-exporter-configuration
+         (inherit config)
+         (package (service-rewriter
+                   (prometheus-node-exporter-configuration-package
+                    config))))))
+     (rewrite-service _ upsd-service-type
+      (lambda (config)
+        (upsd-configuration
+         (inherit config)
+         (package (service-rewriter
+                   (upsd-configuration-package config))))))
+     (rewrite-service _ spartan-sensor-mesh-service-type
+      (lambda (config)
+        (let ((nut (spartan-sensor-mesh-configuration-nut config)))
+          (spartan-sensor-mesh-configuration
            (inherit config)
-           (avahi (service-rewriter (avahi-configuration-avahi config))))))
-       openssh-service-type
-       (lambda (config)
-         (openssh-configuration
-          (inherit config)
-          (openssh (service-rewriter (openssh-configuration-openssh config))))))))))
+           (nut (and nut (service-rewriter nut)))))))))))
+
+
+(define (with-extra-mixed-packages rewriter extra-mixed-packages)
+  (if (null? extra-mixed-packages)
+      rewriter
+      (lambda (package)
+        (rewriter package #:extra-mixed-packages extra-mixed-packages))))
 
 (define* (with-armhf-workarounds os
                                   #:key
-                                  (package-rewriter identity))
-  "Apply the ARM hard-float package fixes and select the armhf mixed-compilation policy."
+                                  (package-rewriter identity)
+                                  (extra-mixed-packages '()))
+  "Apply the ARM hard-float package fixes and select the armhf mixed-compilation policy.
+EXTRA-MIXED-PACKAGES adds host-specific packages to the mixed-compilation policy."
   (with-arm-workarounds os
-    #:package-rewriter package-rewriter
-    #:service-rewriter rewrite-armhf-packages))
+    #:package-rewriter (with-extra-mixed-packages package-rewriter extra-mixed-packages)
+    #:service-rewriter (lambda (package)
+                         (armhf-package-rewriter
+                          package #:extra-mixed-packages extra-mixed-packages))))
 
-(define* (with-aarch64-workarounds os #:key (package-rewriter identity))
+(define* (with-aarch64-workarounds os #:key (package-rewriter identity)
+                                          (extra-mixed-packages '()))
   "Apply the ARM package fixes and select the aarch64 mixed-compilation policy.
-PACKAGE-REWRITER supplies the board's Guile policy, such as `rpi3-package'."
+PACKAGE-REWRITER supplies the board's Guile policy, such as `rpi3-package'.
+EXTRA-MIXED-PACKAGES adds host-specific packages to the mixed-compilation policy."
   (with-arm-workarounds os
-    #:package-rewriter package-rewriter
-    #:service-rewriter rewrite-aarch64-packages))
+    #:package-rewriter (with-extra-mixed-packages package-rewriter extra-mixed-packages)
+    #:service-rewriter (lambda (package)
+                         (aarch64-package-rewriter
+                          package #:extra-mixed-packages extra-mixed-packages))))

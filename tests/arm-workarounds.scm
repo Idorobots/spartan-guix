@@ -1,10 +1,12 @@
 (use-modules (gnu)
              (gnu bootloader grub)
              ((gnu packages admin) #:select (shepherd-1.0 sudo))
+             ((gnu packages dns) #:select (avahi))
              ((gnu packages freedesktop) #:select (elogind))
              (gnu packages glib)
              (gnu packages gnupg)
              (gnu packages linux)
+             ((gnu packages monitoring) #:select (prometheus-node-exporter))
              ((gnu packages package-management) #:select (guix))
              (gnu packages virtualization)
              (gnu packages xml)
@@ -23,6 +25,10 @@
              (srfi srfi-1)
              (srfi srfi-64))
 
+(test-begin "arm-workarounds")
+
+(define host-extra-mixed-packages
+  (list glib dbus avahi elogind prometheus-node-exporter))
 (test-begin "arm-workarounds")
 
 (define base-os
@@ -114,12 +120,49 @@
       (derivation-file-name original-x86)
       (derivation-file-name (lower libgpg-error "x86_64-linux")))
 
+    (test-assert "host-specific packages are not in the base consumer list"
+      (not (eq? 'mixed-compilation
+                (build-system-name (package-build-system (rpi2-package dbus))))))
+
     (test-equal "elogind uses mixed compilation on armhf"
       'mixed-compilation
-      (build-system-name (package-build-system (rpi2-package elogind))))
+      (build-system-name (package-build-system (rpi2-package elogind #:extra-mixed-packages host-extra-mixed-packages))))
     (test-equal "elogind uses mixed compilation on aarch64"
       'mixed-compilation
-      (build-system-name (package-build-system (rpi4-package elogind))))
+      (build-system-name (package-build-system (rpi4-package elogind #:extra-mixed-packages host-extra-mixed-packages))))
+
+    (test-equal "glib uses mixed compilation on armhf"
+      'mixed-compilation
+      (build-system-name (package-build-system (rpi2-package glib #:extra-mixed-packages host-extra-mixed-packages))))
+    (test-equal "glib uses mixed compilation on aarch64"
+      'mixed-compilation
+      (build-system-name (package-build-system (rpi4-package glib #:extra-mixed-packages host-extra-mixed-packages))))
+
+    (test-equal "avahi uses mixed compilation on armhf"
+      'mixed-compilation
+      (build-system-name (package-build-system (rpi2-package avahi #:extra-mixed-packages host-extra-mixed-packages))))
+    (test-equal "avahi uses mixed compilation on aarch64"
+      'mixed-compilation
+      (build-system-name (package-build-system (rpi4-package avahi #:extra-mixed-packages host-extra-mixed-packages))))
+    (test-equal "dbus uses mixed compilation on armhf"
+      'mixed-compilation
+      (build-system-name (package-build-system (rpi2-package dbus #:extra-mixed-packages host-extra-mixed-packages))))
+    (test-equal "dbus uses mixed compilation on aarch64"
+      'mixed-compilation
+      (build-system-name (package-build-system (rpi4-package dbus #:extra-mixed-packages host-extra-mixed-packages))))
+
+    (test-equal "prometheus-node-exporter uses mixed compilation on armhf"
+      'mixed-compilation
+      (build-system-name
+       (package-build-system
+        (rpi2-package prometheus-node-exporter
+                      #:extra-mixed-packages host-extra-mixed-packages))))
+    (test-equal "prometheus-node-exporter uses mixed compilation on aarch64"
+      'mixed-compilation
+      (build-system-name
+       (package-build-system
+        (rpi4-package prometheus-node-exporter
+                      #:extra-mixed-packages host-extra-mixed-packages))))
 
     (test-assert "libxslt retains EXSLT crypto with patched armhf dependencies"
       (let ((xslt (armhf libxslt)))
