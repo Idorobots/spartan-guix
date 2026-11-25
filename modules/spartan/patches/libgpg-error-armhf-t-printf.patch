@@ -1,0 +1,29 @@
+Skip the LDBL_MAX formatting test when long double is no wider than double.
+
+On armhf, long double and double are both 64-bit, so formatting LDBL_MAX with
+%.100Lf succeeds just like DBL_MAX and the test's expected failure cannot be
+observed.  This backports the upstream fix from libgpg-error commit
+bfdf7b0b7b62f4463451a7d5f8408cec75520dca (GnuPG bug 8309) without requiring
+autoreconf.
+
+--- a/tests/t-printf.c
++++ b/tests/t-printf.c
+@@ -469,6 +469,7 @@ check_large_float (void)
+     show ("format \"%%.100Lf\" with DBL_MAX: ->%s<-\n", buf);
+   gpgrt_free (buf);
+ 
++#if !(defined(__SIZEOF_LONG_DOUBLE__) && __SIZEOF_LONG_DOUBLE__ == __SIZEOF_DOUBLE__)
+   ld = LDBL_MAX;
+   buf = gpgrt_bsprintf ("%.100Lf\n", ld);
+   if (buf)
+@@ -478,6 +479,10 @@ check_large_float (void)
+   else if (verbose)
+     show ("format \"%%.100Lf\" with LDBL_MAX failed as expected\n");
+   gpgrt_free (buf);
++#else
++  if (verbose)
++    show ("LDBL_MAX == DBL_MAX - skipping LDBL_MAX test\n");
++#endif
+ 
+ #endif /*HAVE_LONG_DOUBLE*/
+ }

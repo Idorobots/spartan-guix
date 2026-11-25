@@ -1,7 +1,6 @@
 (define-module (gnu system images raspberrypi)
   #:use-module (gnu bootloader)
   #:use-module (gnu image)
-  #:use-module ((gnu packages guile-xyz) #:select (guile-avahi))
   #:use-module (gnu services)
   #:use-module (gnu services base)
   #:use-module (gnu services networking)
@@ -14,29 +13,22 @@
   #:use-module (guix platforms arm)
   #:use-module (nongnu packages linux)
   #:use-module (spartan bootloader raspberrypi)
-  #:use-module (spartan packages avahi)
-  #:use-module (spartan packages cortex-a53)
   #:use-module (spartan packages firmware)
-  #:use-module (spartan packages guile)
-  #:use-module (spartan packages guile-config)
-  #:use-module (spartan packages guile-snarf)
   #:use-module (spartan packages mixed)
   #:use-module (spartan packages raspberrypi)
+  #:use-module (spartan system arm-workarounds)
   #:use-module (spartan services file-systems)
+  #:re-export (rpi2-package rpi3-package rpi4-package rpi3-guile-fixes)
   #:export (%rpi-root-file-system
             %rpi-boot-file-system
             %rpi-resize-file-system-service
             rpi-image-type
             rpi2-image-type
-            rpi2-package
             rpi2-barebones-os
             rpi2-barebones-raw-image
-            rpi3-guile-fixes
-            rpi3-package
             rpi3-barebones-os
             rpi3-barebones-raw-image
             rpi4-image-type
-            rpi4-package
             rpi4-barebones-os
             rpi4-barebones-raw-image))
 
@@ -46,39 +38,6 @@
 
 (define %rpi-root-label "Guix")
 (define %rpi-boot-label "PIBOOT")
-
-(define %rpi-sdk-guile-fixes
-  (compose guile-with-native-snarf guile-with-native-config))
-
-(define rpi3-guile-fixes
-  (compose guile-with-cortex-a53-fix %rpi-sdk-guile-fixes))
-
-(define %rpi-package-replacements
-  `((,guile-avahi . ,guile-avahi/without-daemon-tests)))
-
-(define* (rpi2-package package #:key (system %system))
-  "Apply the Pi 2's SDK fixes and ARM hard-float mixed compilation policy."
-  ((make-guile-runtime-rewriter
-    #:runtime-system "armhf-linux" #:system system
-    #:guile-transform %rpi-sdk-guile-fixes
-    #:replacements %rpi-package-replacements)
-   package))
-
-(define* (rpi3-package package #:key (system %system))
-  "Apply the Pi 3's explicit fixes and mixed compilation policy to PACKAGE."
-  ((make-guile-runtime-rewriter
-    #:guile-transform rpi3-guile-fixes
-    #:replacements %rpi-package-replacements
-    #:system system)
-   package))
-
-(define* (rpi4-package package #:key (system %system))
-  ;; The Pi 4's Cortex-A72 does not need the Pi 3's Cortex-A53 workaround.
-  ((make-guile-runtime-rewriter
-    #:system system
-    #:guile-transform %rpi-sdk-guile-fixes
-    #:replacements %rpi-package-replacements)
-   package))
 
 (define (rpi-essential-services os rewrite-package)
   (modify-services (operating-system-default-essential-services os)
@@ -122,7 +81,7 @@
                        (file-append guix "/share/guix/bordeaux.guix.gnu.org.pub")))))))))
 
 ;; Pi 2 Model B v1.0/v1.1: BCM2836, Cortex-A7, 32-bit ARMv7 hard float.
-(define rpi2-barebones-os
+(define rpi2-barebones-os-base
   (operating-system
    (host-name "raspberrypi2")
    (timezone "Etc/UTC")
@@ -136,7 +95,7 @@
                    %base-firmware))
    ;; multi_v7_defconfig builds the Pi's SD host and ext4 drivers in.
    (initrd-modules '())
-   (packages (map rpi2-package %base-packages))
+   (packages %base-packages)
    (essential-services
     (rpi-essential-services this-operating-system rpi2-package))
    (bootloader
@@ -148,7 +107,11 @@
             %base-file-systems))
    (services (rpi-services rpi2-package))))
 
-(define rpi3-barebones-os
+(define rpi2-barebones-os
+  (with-armhf-workarounds rpi2-barebones-os-base
+    #:package-rewriter rpi2-package))
+
+(define rpi3-barebones-os-base
   (operating-system
    (host-name "raspberrypi3")
    (timezone "Etc/UTC")
@@ -180,7 +143,7 @@
                     rpi3-bluetooth-firmware
                     %base-firmware))
    (initrd-modules '())
-   (packages (map rpi3-package %base-packages))
+   (packages %base-packages)
    (essential-services
     (rpi-essential-services this-operating-system rpi3-package))
    (bootloader
@@ -192,18 +155,26 @@
             %base-file-systems))
    (services (rpi-services rpi3-package))))
 
-(define rpi4-barebones-os
+(define rpi3-barebones-os
+  (with-aarch64-workarounds rpi3-barebones-os-base
+    #:package-rewriter rpi3-package))
+
+(define rpi4-barebones-os-base
   (operating-system
-   (inherit rpi3-barebones-os)
+   (inherit rpi3-barebones-os-base)
    (host-name "raspberrypi4")
    (kernel-arguments %default-kernel-arguments)
    (firmware (cons* (package-with-compilation-system linux-firmware-uncompressed)
                     rpi4-bluetooth-firmware
                     %base-firmware))
-   (packages (map rpi4-package %base-packages))
+   (packages %base-packages)
    (essential-services
     (rpi-essential-services this-operating-system rpi4-package))
    (services (rpi-services rpi4-package))))
+
+(define rpi4-barebones-os
+  (with-aarch64-workarounds rpi4-barebones-os-base
+    #:package-rewriter rpi4-package))
 
 (define initialize-rpi-boot-partition
   ;; Firmware and U-Boot live on FAT. Guix installs extlinux.conf on root.

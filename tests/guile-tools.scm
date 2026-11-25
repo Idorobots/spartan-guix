@@ -13,6 +13,7 @@
              (spartan packages guile)
              (spartan packages guile-config)
              (spartan packages guile-snarf)
+             (spartan packages mixed)
              (srfi srfi-1)
              (srfi srfi-64))
 

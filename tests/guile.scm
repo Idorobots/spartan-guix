@@ -10,6 +10,7 @@
              (guix packages)
              (guix utils)
              (spartan packages cortex-a53)
+             (spartan packages mixed)
              (srfi srfi-1)
              (srfi srfi-64))
 

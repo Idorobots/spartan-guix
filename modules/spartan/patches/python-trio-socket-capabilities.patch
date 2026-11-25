@@ -1,0 +1,69 @@
+Probe socket capabilities before asserting optional kernel behaviour in tests.
+
+Under ARM QEMU user emulation, SO_BINDTODEVICE with a NULL pointer and zero
+length returns EFAULT, and IP_BIND_ADDRESS_NO_PORT getsockopt returns
+ENOPROTOOPT.  Match those capabilities with stdlib sockets before exercising
+the corresponding assertion.  Keep all test cases and the remaining socket
+checks enabled; no Trio runtime code is changed.
+
+--- a/src/trio/_tests/test_socket.py
++++ b/src/trio/_tests/test_socket.py
+@@ -463,7 +463,17 @@
++def _supports_null_bindtodevice() -> bool:
++    # Some syscall translators reject a NULL optval even with optlen=0.
++    with stdlib_socket.socket() as probe:
++        try:
++            probe.setsockopt(stdlib_socket.SOL_SOCKET, stdlib_socket.SO_BINDTODEVICE, None, 0)
++        except OSError as exc:
++            return exc.errno != errno.EFAULT
++    return True
++
++
+ def setsockopt_tests(sock: SocketType | SocketStream) -> None:
+     """Extract these out, to be reused for SocketStream also."""
+     # specifying optlen. Not supported on pypy, and I couldn't find
+     # valid calls on darwin or win32.
+-    if hasattr(tsocket, "SO_BINDTODEVICE"):
++    if hasattr(tsocket, "SO_BINDTODEVICE") and _supports_null_bindtodevice():
+         try:
+             sock.setsockopt(tsocket.SOL_SOCKET, tsocket.SO_BINDTODEVICE, None, 0)
+--- a/src/trio/_tests/test_highlevel_open_tcp_stream.py
++++ b/src/trio/_tests/test_highlevel_open_tcp_stream.py
+@@ -1,5 +1,6 @@
+ from __future__ import annotations
+ 
++import errno
+ import socket
+ import sys
+ from socket import AddressFamily, SocketKind
+@@ -143,6 +144,18 @@
++def _supports_bind_address_no_port() -> bool:
++    # A Python constant does not guarantee support in the running kernel/ABI.
++    with socket.socket() as probe:
++        try:
++            probe.getsockopt(trio.socket.IPPROTO_IP, trio.socket.IP_BIND_ADDRESS_NO_PORT)
++        except OSError as exc:
++            if exc.errno == errno.ENOPROTOOPT:
++                return False
++            raise
++    return True
++
++
+ async def test_local_address_real() -> None:
+     with trio.socket.socket() as listener:
+         await listener.bind(("127.0.0.1", 0))
+         listener.listen()
+ 
+         # It's hard to test local_address properly, because you need multiple
+@@ -161,7 +174,10 @@ async def test_local_address_real() -> None:
+             local_address=local_address,
+         ) as client_stream:
+             assert client_stream.socket.getsockname()[0] == local_address
+-            if hasattr(trio.socket, "IP_BIND_ADDRESS_NO_PORT"):
++            if (
++                hasattr(trio.socket, "IP_BIND_ADDRESS_NO_PORT")
++                and _supports_bind_address_no_port()
++            ):
+                 assert client_stream.socket.getsockopt(
+                     trio.socket.IPPROTO_IP,
+                     trio.socket.IP_BIND_ADDRESS_NO_PORT,

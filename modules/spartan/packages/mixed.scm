@@ -12,7 +12,9 @@
   #:use-module (srfi srfi-1)
   #:export (package-with-compilation-system
             map-compilation-package
-            make-compilation-package-mapper))
+            make-compilation-package-mapper
+            native-outputs-available?
+            native-package-outputs-available?))
 
 ;; Keep recipe transformations inside an adapter: changing the arguments on
 ;; the outer package would leave the recipe captured by its lowerer unchanged.
@@ -112,6 +114,13 @@ platform.  This keeps recipe fixes inside the lowerer's captured recipe."
    (lambda (package candidate system)
      (with-store store
        (native-candidate-usable? store package candidate system)))))
+
+(define* (native-package-outputs-available? package system
+                                            #:optional (candidate package))
+  "Whether PACKAGE's native outputs for SYSTEM are local or substitutable.
+CANDIDATE defaults to PACKAGE and must have the same derivation for an exact
+native hit."
+  ((%native-outputs-available?) package candidate system))
 
 (define (compilation-target compilation-system system target)
   (let ((destination (gnu-triplet->nix-system (or target system))))
