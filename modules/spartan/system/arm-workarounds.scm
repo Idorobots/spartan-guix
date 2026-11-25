@@ -106,6 +106,16 @@
 
 (define (fix-common-package base system)
   (cond
+   ;; gobject-introspection 1.86.0 has the same Meson libdir issue as GLib.
+   ((and (string=? (package-name base) "gobject-introspection")
+         (string=? (package-version base) "1.86.0"))
+    (fix-or-substitute
+     base system
+     (package
+       (inherit base)
+       (arguments
+        (append (package-arguments base)
+                (list #:configure-flags #~(list "-Dlibdir=lib")))))))
    ;; Sudo 1.9.17p1 defaults its systemd tmpfiles directory to the host's
    ;; /usr/lib/tmpfiles.d; installing there fails in the build sandbox.
    ((and (string=? (package-name base) "sudo")
@@ -279,7 +289,8 @@ Image-construction tools are executed by the runner, not by the target OS."
                          (rewrite-armhf-packages package))
                         ((string=? destination "aarch64-linux")
                          (rewrite-aarch64-packages package))
-                        (else package)))
+                        (else
+                         (fix-common-package package destination))))
                      system target))
       expander => %original-package-expand)
 

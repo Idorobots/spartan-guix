@@ -211,6 +211,17 @@
      '("armhf-linux" "aarch64-linux")
      (list armhf aarch64))
 
+    (test-assert "gobject-introspection forces the standard library directory"
+      (parameterize (((@@ (spartan packages mixed) %native-outputs-available?)
+                      (const #f)))
+        (string-contains
+         (object->string
+          (package-arguments
+           ((@@ (spartan system arm-workarounds) fix-common-package)
+            (@@ (gnu packages glib) gobject-introspection)
+            "x86_64-linux")))
+         "-Dlibdir=lib")))
+
     (test-assert "PAM's rewritten recipe forces the standard library directory"
       (string-contains (object->string (package-arguments (armhf linux-pam)))
                        "-Dlibdir=lib"))
