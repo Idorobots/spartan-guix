@@ -106,6 +106,28 @@
 
 (define (fix-common-package base system)
   (cond
+   ;; HarfBuzz 11.4.4 has the same Meson lib64 default.
+   ((and (string=? (package-name base) "harfbuzz")
+         (string=? (package-version base) "11.4.4"))
+    (fix-or-substitute
+     base system
+     (package
+       (inherit base)
+       (arguments
+        (substitute-keyword-arguments (package-arguments base)
+          ((#:configure-flags flags #~'())
+           #~(cons "-Dlibdir=lib" #$flags)))))))
+   ;; Cairo 1.18.4 also selects Meson's lib64 default in this revision.
+   ((and (string=? (package-name base) "cairo")
+         (string=? (package-version base) "1.18.4"))
+    (fix-or-substitute
+     base system
+     (package
+       (inherit base)
+       (arguments
+        (substitute-keyword-arguments (package-arguments base)
+          ((#:configure-flags flags #~'())
+           #~(cons "-Dlibdir=lib" #$flags)))))))
    ;; gobject-introspection 1.86.0 has the same Meson libdir issue as GLib.
    ((and (string=? (package-name base) "gobject-introspection")
          (string=? (package-version base) "1.86.0"))
