@@ -48,7 +48,7 @@
 (define guile-3.0-latest/rpi3 (rpi3-package guile-3.0-latest))
 (define sdk-fixes (compose guile-with-native-snarf guile-with-native-config))
 (define* (sdk-package p #:key (system %system))
-  ((make-guile-runtime-rewriter #:guile-transform sdk-fixes #:system system) p))
+  ((make-mixed-compilation-rewriter #:guile-transform sdk-fixes #:system system) p))
 
 (define routed
   (package-with-compilation-system hello #:system "x86_64-linux"))

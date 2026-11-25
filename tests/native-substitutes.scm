@@ -178,7 +178,7 @@
                                  (object->string choices))
        ;; A fresh recipe transformation gives each case independent package
        ;; identities; library choices remain shared, just as in one invocation.
-       (let* ((rewrite (make-guile-runtime-rewriter
+       (let* ((rewrite (make-mixed-compilation-rewriter
                         #:system "x86_64-linux"
                         #:guile-transform (lambda (p) (package (inherit p)))))
               (bases (list guile-3.0 guile-3.0-latest guile-readline)))

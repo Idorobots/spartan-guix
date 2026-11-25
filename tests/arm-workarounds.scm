@@ -164,6 +164,16 @@
         (rpi4-package prometheus-node-exporter
                       #:extra-mixed-packages host-extra-mixed-packages))))
 
+    (test-equal "avahi's native GLib build input uses mixed compilation"
+      'mixed-compilation
+      (let ((native
+             (assoc-ref
+              (package-native-inputs
+               (rpi2-package avahi
+                             #:extra-mixed-packages host-extra-mixed-packages))
+              "glib")))
+        (build-system-name (package-build-system (car native)))))
+
     (test-assert "libxslt retains EXSLT crypto with patched armhf dependencies"
       (let ((xslt (armhf libxslt)))
         (and (lookup-package-input xslt "libgcrypt")

@@ -33,7 +33,7 @@
 (define consumers (list guix shepherd-0.10 shepherd-1.0 guile-ssh guile-readline))
 (define selected (append (list guile-3.0 guile-3.0-latest) consumers))
 (define (rewriter runtime system)
-  (make-guile-runtime-rewriter #:runtime-system runtime #:system system
+  (make-mixed-compilation-rewriter #:runtime-system runtime #:system system
                                #:guile-transform sdk-fixes))
 
 (for-each
@@ -58,7 +58,7 @@
      (test-assert (string-append runtime ": native-output hits retain native builds")
        (parameterize ((available? (const #t)))
          ;; A fresh transform supplies independent adapter identities/decisions.
-         (let ((rewrite (make-guile-runtime-rewriter
+         (let ((rewrite (make-mixed-compilation-rewriter
                          #:runtime-system runtime #:system "x86_64-linux"
                          #:guile-transform (lambda (p) (package (inherit p))))))
            (every (lambda (base)
@@ -86,7 +86,7 @@
       (eq? (rewrite guile-3.0) (lookup-package-input p "guile")))))
 
 (test-assert "boards may extend the selected consumer set"
-  (let* ((rewrite (make-guile-runtime-rewriter
+  (let* ((rewrite (make-mixed-compilation-rewriter
                    #:runtime-system "armhf-linux" #:system "x86_64-linux"
                    #:consumers (list hello)))
          (bag (package->bag (rewrite hello) "armhf-linux" #f)))

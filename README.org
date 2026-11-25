@@ -484,7 +484,7 @@ adapted package.
   installed preprocessor defaults.
 - =(spartan packages guile-config)=: =guile-with-native-config= supplies a usable
   =pkg-config= for the installed Guile SDK.
-- =(spartan packages guile)=: =make-guile-runtime-rewriter= returns a package
+- =(spartan packages guile)=: =make-mixed-compilation-rewriter= returns a package
   transformation accepting =#:guile-transform=, =#:replacements= (package pairs)
   =#:system= (compilation platform), =#:runtime-system= (default
   ="aarch64-linux"=), and =#:consumers= (additional packages to adapt).
@@ -493,14 +493,14 @@ adapted package.
 (use-modules (gnu packages guile) (spartan packages guile)
              (spartan packages guile-config) (spartan packages guile-snarf))
 (define with-guile-sdk
-  (make-guile-runtime-rewriter
+  (make-mixed-compilation-rewriter
    #:runtime-system "armhf-linux"
    #:guile-transform (compose guile-with-native-snarf guile-with-native-config)))
 (with-guile-sdk guile-readline)
 #+end_src
 
 The Pi 2, Pi 3 and Pi 4 baselines use this same mechanism for both Guile
-versions, Guix, Shepherd, Guile-SSH and Guile-Readline. The Pi 2 and Pi 4 select
+versions and the base mixed-compilation packages. The Pi 2 and Pi 4 select
 the SDK-only fixes; the Pi 3 also selects its Cortex-A53 linker fix. Board helpers
 accept an optional =#:system= compilation-platform override. Kernels and
 uncompressed firmware use the compilation adapter directly.

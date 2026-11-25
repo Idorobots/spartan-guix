@@ -84,8 +84,8 @@
        "gcc\n-E\n-DPROBE\ninput.c\n" (run-snarf "" "")))))
 
 (define sdk-fixes (compose guile-with-native-snarf guile-with-native-config))
-(define sdk-package (make-guile-runtime-rewriter #:guile-transform sdk-fixes))
-(define plain-package (make-guile-runtime-rewriter))
+(define sdk-package (make-mixed-compilation-rewriter #:guile-transform sdk-fixes))
+(define plain-package (make-mixed-compilation-rewriter))
 
 (test-assert "runtime rewriting leaves consumer arguments untouched"
   (let* ((consumer (package (inherit hello) (inputs (list guile-3.0))))
@@ -101,7 +101,7 @@
         (let ((target (and (not (string=? system "aarch64-linux"))
                            "aarch64-linux-gnu")))
           (parameterize ((%current-system system) (%current-target-system target))
-            (let* ((rewrite (make-guile-runtime-rewriter
+            (let* ((rewrite (make-mixed-compilation-rewriter
                              #:guile-transform sdk-fixes #:system system))
                    (selected (rewrite base))
                    (bag (package->bag selected "aarch64-linux" #f))
@@ -147,7 +147,7 @@
                 (package-arguments (plain-package guile-avahi))))))
 
 (test-assert "Avahi skips daemon tests without patching its source and receives SDK-only Guile"
-  (let* ((rewrite (make-guile-runtime-rewriter
+  (let* ((rewrite (make-mixed-compilation-rewriter
                    #:guile-transform sdk-fixes
                    #:replacements `((,guile-avahi . ,guile-avahi/without-daemon-tests))))
          (p (rewrite guile-avahi)))

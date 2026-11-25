@@ -14,7 +14,7 @@
              (srfi srfi-1))
 
 (define sdk-package
-  (make-guile-runtime-rewriter
+  (make-mixed-compilation-rewriter
    #:guile-transform (compose guile-with-native-snarf guile-with-native-config)))
 
 (define (sdk-check guile rewrite)

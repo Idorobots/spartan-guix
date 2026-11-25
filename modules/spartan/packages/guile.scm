@@ -9,22 +9,23 @@
   #:use-module (guix utils)
   #:use-module (ice-9 match)
   #:use-module (spartan packages mixed)
-  #:export (make-guile-runtime-rewriter))
+  #:export (make-mixed-compilation-rewriter))
 
 (define %selective-consumers
   (list guix shepherd-0.10 shepherd-1.0 guile-ssh guile-readline))
 
-(define make-guile-runtime-rewriter
+(define make-mixed-compilation-rewriter
   (memoize
    (lambda* (#:key (guile-transform identity) (replacements '()) (system %system)
                   (runtime-system "aarch64-linux")
                   (consumers %selective-consumers))
-     "Return a RUNTIME-SYSTEM rewriter compiling selected packages on SYSTEM.
+     "Return a mixed-compilation rewriter for RUNTIME-SYSTEM packages.
+Compile selected packages on SYSTEM when their native outputs are unavailable.
 Apply GUILE-TRANSFORM to each upstream Guile recipe before adaptation.  Apply
 REPLACEMENTS as recipe variants, rewriting their runtime dependencies too.
-No hardware or SDK fixes are enabled by default.  Native cross-build tools
-remain upstream; duplicate Guile inputs of native consumers are aligned.
-CONSUMERS selects the additional packages to adapt, after recipe rewriting."
+No hardware or SDK fixes are enabled by default.  Native inputs selected as
+CONSUMERS are adapted as well; unrelated build-only tools remain upstream.
+CONSUMERS selects the packages to adapt, after recipe rewriting."
      (let ((system (gnu-triplet->nix-system system))
            (runtime-system (gnu-triplet->nix-system runtime-system)))
        (define guiles
@@ -40,12 +41,15 @@ CONSUMERS selects the additional packages to adapt, after recipe rewriting."
               (if (eq? selected p) input (cons* label selected outputs))))
            (_ input)))
 
-       (define (rewrite-native-guile input)
+       (define (rewrite-native-input input)
          ;; Native inputs precede runtime inputs in PATH/PKG_CONFIG_PATH.
-         ;; Align direct duplicates without descending into build-only tools.
+         ;; Align direct Guile duplicates and adapt selected native build tools
+         ;; without descending into unrelated build-only tools.
          (match input
            ((label (? package? p) outputs ...)
-            (let ((selected (assq-ref guiles p)))
+            (let ((selected (or (assq-ref guiles p)
+                                (and (memq p consumers)
+                                     (rewrite p)))))
               (if selected (cons* label selected outputs) input)))
            (_ input)))
 
@@ -78,7 +82,7 @@ CONSUMERS selects the additional packages to adapt, after recipe rewriting."
                      (native-inputs
                       (if (%current-target-system)
                           (package-native-inputs p)
-                          (map rewrite-native-guile (package-native-inputs p))))
+                          (map rewrite-native-input (package-native-inputs p))))
                      (propagated-inputs
                       (map rewrite-input (package-propagated-inputs p)))
                      (replacement

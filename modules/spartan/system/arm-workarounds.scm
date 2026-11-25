@@ -57,7 +57,7 @@
 
 (define* (make-aarch64-sdk-rewriter #:key (cortex-a53? #f) (system %system)
                                      (extra-mixed-packages '()))
-  (make-guile-runtime-rewriter
+  (make-mixed-compilation-rewriter
    #:runtime-system "aarch64-linux"
    #:system system
    #:guile-transform (if cortex-a53? %cortex-guile-fixes %sdk-guile-fixes)
@@ -65,7 +65,7 @@
    #:consumers (append %base-mixed-packages extra-mixed-packages)))
 
 (define* (make-armhf-sdk-rewriter #:key (system %system) (extra-mixed-packages '()))
-  (make-guile-runtime-rewriter
+  (make-mixed-compilation-rewriter
    #:runtime-system "armhf-linux"
    #:system system
    #:guile-transform %sdk-guile-fixes
