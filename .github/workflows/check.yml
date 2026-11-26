@@ -29,7 +29,10 @@ jobs:
         with:
           pullAfterInstall: false
       - name: Generate the exact-commit CI channel list
-        run: guix repl ci/channels.scm > channels-ci.scm
+        run: |
+          # Guix fetches branch refs, so expose PR merge commits from detached HEAD.
+          git update-ref refs/heads/guix-ci "$GITHUB_SHA"
+          guix repl ci/channels.scm > channels-ci.scm
       - name: Bootstrap pinned dependencies and this exact channel commit
         run: guix time-machine -C channels-ci.scm -- describe -f channels
       - name: Run filesystem service and Raspberry Pi regression tests
