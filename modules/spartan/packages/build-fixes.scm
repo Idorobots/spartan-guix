@@ -28,13 +28,30 @@
     (package/inherit base
       (native-inputs (cons (list "gettext" gettext-minimal)
                            (package-native-inputs base)))))
+   ((and armhf? (is? "glib" "2.86.0"))
+    (package/inherit base
+      (arguments
+       (substitute-keyword-arguments (package-arguments base)
+         ;; Retain the libdir correction alongside the test fallback.
+         ((#:configure-flags flags #~'()) #~(cons "-Dlibdir=lib" #$flags))
+         ((#:phases phases #~%standard-phases)
+          #~(modify-phases #$phases
+              (add-after 'disable-failing-tests 'skip-qemu-incompatible-tests
+                (lambda _
+                  ;; QEMU user emulation cannot provide the native RLIMIT_NPROC
+                  ;; failure semantics or ptrace support these subtests require.
+                  ;; Keep the remaining thread, thread-pool and subprocess tests.
+                  (substitute* '("glib/tests/thread.c"
+                                 "glib/tests/thread-pool.c"
+                                 "gio/tests/gsubprocess.c")
+                    (("[ \t]*g_test_add_func.*\"/(thread/thread4|thread_pool/pool_fail|gsubprocess/exit-status/trapped)\".*;")
+                     ""))))))))))
    ((or (is? "harfbuzz" "11.4.4")
         (is? "cairo" "1.18.4")
         (is? "gobject-introspection" "1.86.0")
         (and armhf?
              (or (is? "linux-pam" "1.7.2")
-                 (is? "dbus" "1.16.2")
-                 (is? "glib" "2.86.0"))))
+                 (is? "dbus" "1.16.2"))))
     ;; Meson's host-dependent lib64 default disagrees with Guix's RUNPATH.
     (package/inherit base
       (arguments
