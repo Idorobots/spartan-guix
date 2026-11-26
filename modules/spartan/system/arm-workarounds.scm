@@ -8,7 +8,6 @@
   #:use-module ((gnu packages package-management) #:select (guix))
   #:use-module ((guix config) #:select (%system))
   #:use-module ((gnu packages ssh) #:select (guile-ssh))
-  #:use-module ((gnu packages guile-xyz) #:select (guile-avahi))
   #:use-module (gnu services avahi)
   #:use-module (gnu services base)
   #:use-module (gnu services dbus)
@@ -21,7 +20,6 @@
   #:use-module (guix utils)
   #:use-module ((gnu packages flashing-tools) #:select (genimage))
   #:use-module ((gnu packages virtualization) #:select (qemu-minimal))
-  #:use-module (spartan packages avahi)
   #:use-module (spartan packages cortex-a53)
   #:use-module (spartan packages guile)
   #:use-module (spartan packages guile-config)
@@ -56,16 +54,12 @@
 (define %base-mixed-packages
   (list guix shepherd-0.10 shepherd-1.0 guile-ssh guile-readline sudo))
 
-(define %replacements
-  `((,guile-avahi . ,guile-avahi/without-daemon-tests)))
-
 (define* (make-aarch64-sdk-rewriter #:key (cortex-a53? #f) (system %system)
                                      (extra-mixed-packages '()))
   (make-mixed-compilation-rewriter
    #:runtime-system "aarch64-linux"
    #:system system
    #:guile-transform (if cortex-a53? %cortex-guile-fixes %sdk-guile-fixes)
-   #:replacements %replacements
    #:consumers (append %base-mixed-packages extra-mixed-packages)))
 
 (define* (make-armhf-sdk-rewriter #:key (system %system) (extra-mixed-packages '()))
@@ -73,7 +67,6 @@
    #:runtime-system "armhf-linux"
    #:system system
    #:guile-transform %sdk-guile-fixes
-   #:replacements %replacements
    #:consumers (append %base-mixed-packages extra-mixed-packages)))
 
 (define* (rpi2-package package #:key (system %system) (extra-mixed-packages '()))
@@ -106,6 +99,17 @@
 
 (define (fix-common-package base system)
   (cond
+   ;; The Guile-Avahi tests create clients against an external daemon and
+   ;; collide with names already published on the build host.
+   ((and (string=? (package-name base) "guile-avahi")
+         (string=? (package-version base) "0.4.1"))
+    (fix-or-substitute
+     base system
+     (package
+       (inherit base)
+       (arguments
+        (substitute-keyword-arguments (package-arguments base)
+          ((#:tests? _ #t) #f))))))
    ;; HarfBuzz 11.4.4 has the same Meson lib64 default.
    ((and (string=? (package-name base) "harfbuzz")
          (string=? (package-version base) "11.4.4"))
