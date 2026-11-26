@@ -13,19 +13,22 @@
   #:export (package-with-compilation-system
             map-compilation-package
             make-compilation-package-mapper
+            make-native-first-package-mapper
             native-outputs-available?
             native-package-outputs-available?))
 
 ;; Keep recipe transformations inside an adapter: changing the arguments on
 ;; the outer package would leave the recipe captured by its lowerer unchanged.
 (define %compilation-packages (make-weak-key-hash-table))
+(define %compilation-fallbacks (make-weak-key-hash-table))
 
 (define (map-compilation-package transform package)
   "Apply TRANSFORM to PACKAGE's recipe, retaining any compilation adapters."
   (match (hashq-ref %compilation-packages package)
     ((base . system)
      (package-with-compilation-system
-      (map-compilation-package transform base) #:system system))
+      (map-compilation-package transform base) #:system system
+      #:fallback (or (hashq-ref %compilation-fallbacks package) identity)))
     (#f (transform package))))
 
 (define* (make-compilation-package-mapper transform #:key (deep? #t))
@@ -74,6 +77,81 @@ platform.  This keeps recipe fixes inside the lowerer's captured recipe."
      adapted?
      #:deep? #f))
   rewrite)
+
+(define (make-native-first-package-mapper transform)
+  "Return two procedures: a lazy native-first mapper and its ownership predicate.
+TRANSFORM takes a recipe and its output system.  An exact native hit retains the
+entire original graph.  Only a miss visits explicit and implicit fallback inputs.
+Compilation adapters are retained, so each input is selected in its own eventual
+native/cross context, rather than the enclosing image's architecture."
+  (define owned (make-weak-key-hash-table))
+  (define (owns? p)
+    (or (hashq-ref owned p)
+        (eq? rewrite (hashq-ref %compilation-fallbacks p))))
+  (define (input x)
+    (match x
+      ((label (? package? p) outputs ...) (cons* label (rewrite p) outputs))
+      (_ x)))
+  (define (fallback base system target)
+    (let* ((fixed (transform base (gnu-triplet->nix-system (or target system))))
+           (bs (package-build-system fixed)))
+      (define (lower . args)
+        (let ((lowered (apply (build-system-lower bs) args)))
+          (bag
+            (inherit lowered)
+            (build-inputs (map input (bag-build-inputs lowered)))
+            (host-inputs (map input (bag-host-inputs lowered)))
+            (target-inputs (map input (bag-target-inputs lowered))))))
+      (package
+        (inherit fixed)
+        (inputs (map input (package-inputs fixed)))
+        (native-inputs (map input (package-native-inputs fixed)))
+        (propagated-inputs (map input (package-propagated-inputs fixed)))
+        (replacement (and=> (package-replacement fixed) rewrite))
+        (build-system (build-system (inherit bs) (lower lower))))))
+  (define rewrite
+    (memoize
+     (lambda (base)
+       (if (owns? base)
+           base
+           (let ((adapter (hashq-ref %compilation-packages base)))
+             (define choose
+               (memoize
+                (lambda (system target)
+                  (parameterize ((%current-system system)
+                                 (%current-target-system target))
+                    (if (and (not target)
+                             (native-package-outputs-available? base system))
+                        base
+                        (fallback base system target))))))
+             (define selected
+               (if adapter
+                   ;; Keep the original candidate outside the fallback adapter.
+                   ;; Inheriting a captured lowerer and changing its propagated
+                   ;; fields would otherwise change profile metadata but not
+                   ;; the actual bag, hiding incompatible native library paths.
+                   (package-with-compilation-system (car adapter)
+                                                    #:system (cdr adapter)
+                                                    #:fallback rewrite)
+                   (package
+                     (inherit base)
+                     (build-system
+                      (build-system
+                        (name 'native-first)
+                        (description "Select original native outputs before source-build fixes")
+                        (lower
+                         (lambda* (name #:key system target #:allow-other-keys)
+                           (package->bag (choose system target) system target
+                                         #:graft? #f)))))
+                     (propagated-inputs
+                      (package-propagated-inputs
+                       (choose (%current-system) (%current-target-system))))
+                     (replacement
+                      (package-replacement
+                       (choose (%current-system) (%current-target-system)))))))
+             (hashq-set! owned selected #t)
+             selected)))))
+  (values rewrite owns?))
 
 (define* (native-outputs-available? store package system
                                     #:key (valid? valid-path?)
@@ -131,19 +209,21 @@ native hit."
 
 (define package-with-compilation-system
   (memoize
-   (lambda* (base #:key (system %system))
+   (lambda* (base #:key (system %system) (fallback identity))
      "Prefer BASE's native outputs when local or substitutable, otherwise compile
 on SYSTEM, defaulting to the Guix runner's native platform.  Determine the output
-platform during lowering; same-platform requests remain native without a query.
-Availability decisions are lazy and memoized in memory.  Apply recipe fixes
-before adaptation.  Preserve original output paths without copying contents."
+platform during lowering; same-platform compilation selection needs no query.
+FALLBACK receives the routed recipe only on a miss or a same-platform request;
+it may independently select source-build fixes.  Availability decisions are lazy
+and memoized in memory.  Required recipe changes precede adaptation.  Preserve
+original output paths without copying contents."
      (let ((fallback-system (gnu-triplet->nix-system system)))
        (define (route-input input)
          (match input
            ((label (? package? dependency) outputs ...)
             (cons* label
                    (package-with-compilation-system
-                    dependency #:system fallback-system)
+                    dependency #:system fallback-system #:fallback fallback)
                    outputs))
            (_ input)))
 
@@ -154,21 +234,26 @@ before adaptation.  Preserve original output paths without copying contents."
          (package
            (inherit base)
            (location (package-location base))
+           (replacement (package-replacement base))
            (propagated-inputs (map route-input (package-propagated-inputs base)))))
 
-       (define compilation-system-for
+       (define selection-for
          (memoize
           (lambda (destination)
-            (if (or (string=? fallback-system destination)
-                    ((%native-outputs-available?) base candidate destination))
-                destination
-                fallback-system))))
+            (cond
+             ((string=? fallback-system destination) (cons destination #f))
+             (((%native-outputs-available?) base candidate destination)
+              (cons destination #t))
+             (else (cons fallback-system #f))))))
+
+       (define (recipe-for destination)
+         (if (cdr (selection-for destination)) candidate (fallback candidate)))
 
        (define* (lower name #:key system target #:allow-other-keys)
          (let* ((destination (gnu-triplet->nix-system (or target system)))
-                (compilation-system (compilation-system-for destination)))
+                (compilation-system (car (selection-for destination))))
            ;; Check the exact native candidate before applying a cross override.
-           (package->bag candidate compilation-system
+           (package->bag (recipe-for destination) compilation-system
                          (compilation-target compilation-system system target)
                          #:graft? #f)))
 
@@ -184,25 +269,27 @@ before adaptation.  Preserve original output paths without copying contents."
            (propagated-inputs
             (let* ((destination (gnu-triplet->nix-system
                                  (or (%current-target-system) (%current-system))))
-                   (compilation-system (compilation-system-for destination))
+                   (compilation-system (car (selection-for destination)))
                    (target (compilation-target compilation-system
                                                (%current-system)
                                                (%current-target-system))))
               (parameterize ((%current-system compilation-system)
                              (%current-target-system target))
-                (package-propagated-inputs candidate))))
+                (package-propagated-inputs (recipe-for destination)))))
            (replacement
             (let* ((destination (gnu-triplet->nix-system
                                  (or (%current-target-system) (%current-system))))
-                   (compilation-system (compilation-system-for destination))
+                   (compilation-system (car (selection-for destination)))
                    (target (compilation-target compilation-system
                                                (%current-system)
                                                (%current-target-system))))
               (parameterize ((%current-system compilation-system)
                              (%current-target-system target))
-                (and=> (package-replacement base)
+                (and=> (package-replacement (recipe-for destination))
                        (lambda (replacement)
                          (package-with-compilation-system
-                          replacement #:system fallback-system))))))))
+                          replacement #:system fallback-system
+                          #:fallback fallback))))))))
        (hashq-set! %compilation-packages adapted (cons base fallback-system))
+       (hashq-set! %compilation-fallbacks adapted fallback)
        adapted))))

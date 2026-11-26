@@ -11,6 +11,7 @@
              (spartan packages guile)
              (spartan packages guile-config)
              (spartan packages guile-snarf)
+             (spartan system build-policy)
              (srfi srfi-1))
 
 (define sdk-package
@@ -81,7 +82,7 @@
             (map (lambda (guile)
                    (package-derivation store (sdk-check guile rewrite) "aarch64-linux"))
                  (list guile-3.0 guile-3.0-latest)))
-          (list sdk-package rpi3-package))))
+          (list sdk-package (lambda (p) (build-policy-package %rpi3-build-policy p))))))
     (build-derivations store derivations)
     (for-each (lambda (drv)
                 (format #t "PASS: native guile-snarf, guile-config and C extension: ~a~%"

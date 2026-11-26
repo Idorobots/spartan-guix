@@ -14,12 +14,13 @@
   #:use-module (nongnu packages linux)
   #:use-module (spartan bootloader raspberrypi)
   #:use-module (spartan packages firmware)
-  #:use-module (spartan packages mixed)
   #:use-module (spartan packages raspberrypi)
-  #:use-module (spartan system arm-workarounds)
+  #:use-module (spartan system build-policy)
+  #:use-module (spartan system image)
   #:use-module (spartan services file-systems)
-  #:re-export (rpi2-package rpi3-package rpi4-package rpi3-guile-fixes)
-  #:export (%rpi-root-file-system
+  #:export (make-raspberry-pi-build-policy
+            %rpi2-build-policy %rpi3-build-policy %rpi4-build-policy
+            %rpi-root-file-system
             %rpi-boot-file-system
             %rpi-resize-file-system-service
             rpi-image-type
@@ -39,12 +40,18 @@
 (define %rpi-root-label "Guix")
 (define %rpi-boot-label "PIBOOT")
 
-(define (rpi-essential-services os rewrite-package)
-  (modify-services (operating-system-default-essential-services os)
-    (shepherd-root-service-type config =>
-      (shepherd-configuration
-       (inherit config)
-       (shepherd (rewrite-package (shepherd-configuration-shepherd config)))))))
+(define* (make-raspberry-pi-build-policy #:key (system "aarch64-linux")
+                                       (build-system %system) (cortex-a53? #f)
+                                       (mixed-packages '()))
+  (make-build-policy
+   #:system system #:build-system build-system #:cortex-a53? cortex-a53?
+   #:mixed-packages (append (list linux-rpi2 linux-arm64-generic
+                                 linux-firmware-uncompressed)
+                           mixed-packages)))
+
+(define %rpi2-build-policy (make-raspberry-pi-build-policy #:system "armhf-linux"))
+(define %rpi3-build-policy (make-raspberry-pi-build-policy #:cortex-a53? #t))
+(define %rpi4-build-policy (make-raspberry-pi-build-policy))
 
 (define %rpi-root-file-system
   (file-system
@@ -64,13 +71,13 @@
            (resize-file-system-configuration
              (file-system %rpi-root-file-system))))
 
-(define (rpi-services rewrite-package)
+(define (rpi-services)
   (cons* (service dhcpcd-service-type)
          (service ntp-service-type)
          %rpi-resize-file-system-service
          (modify-services %base-services
            (guix-service-type config =>
-             (let ((guix (rewrite-package (guix-configuration-guix config))))
+             (let ((guix (guix-configuration-guix config)))
                (guix-configuration
                 (inherit config)
                 (guix guix)
@@ -86,18 +93,16 @@
    (host-name "raspberrypi2")
    (timezone "Etc/UTC")
    (locale "en_US.utf8")
-   (kernel (package-with-compilation-system linux-rpi2))
+   (kernel linux-rpi2)
    (kernel-arguments
     (append '("console=ttyAMA0,115200" "console=tty1")
             %default-kernel-arguments))
    ;; Include runtime blobs for attached devices as well as boot firmware.
-   (firmware (cons (package-with-compilation-system linux-firmware-uncompressed)
+   (firmware (cons linux-firmware-uncompressed
                    %base-firmware))
    ;; multi_v7_defconfig builds the Pi's SD host and ext4 drivers in.
    (initrd-modules '())
    (packages %base-packages)
-   (essential-services
-    (rpi-essential-services this-operating-system rpi2-package))
    (bootloader
     (bootloader-configuration
      (bootloader u-boot-rpi-2-bootloader)
@@ -105,11 +110,10 @@
    (file-systems
     (append (list %rpi-root-file-system %rpi-boot-file-system)
             %base-file-systems))
-   (services (rpi-services rpi2-package))))
+   (services (rpi-services))))
 
 (define rpi2-barebones-os
-  (with-armhf-workarounds rpi2-barebones-os-base
-    #:package-rewriter rpi2-package))
+  (with-build-policy rpi2-barebones-os-base %rpi2-build-policy))
 
 (define rpi3-barebones-os-base
   (operating-system
@@ -133,19 +137,17 @@
    ;; Bluetooth: CONFIG_BT and CONFIG_BT_HCIUART (y or m),
    ;; CONFIG_BT_HCIUART_SERDEV=y and CONFIG_BT_HCIUART_BCM=y.
    ;; Keep the board-specific DTBs and radio firmware available too.
-   (kernel (package-with-compilation-system linux-arm64-generic))
+   (kernel linux-arm64-generic)
    ;; Firmware-side WPA handshakes time out on the Pi 3. Let wpa_supplicant
    ;; handle them instead; bit 13 disables brcmfmac's FWSUP feature.
    (kernel-arguments (cons "brcmfmac.feature_disable=0x2000"
                            %default-kernel-arguments))
    ;; On a native-output miss, install the blobs with runner-native tools.
-   (firmware (cons* (package-with-compilation-system linux-firmware-uncompressed)
+   (firmware (cons* linux-firmware-uncompressed
                     rpi3-bluetooth-firmware
                     %base-firmware))
    (initrd-modules '())
    (packages %base-packages)
-   (essential-services
-    (rpi-essential-services this-operating-system rpi3-package))
    (bootloader
     (bootloader-configuration
      (bootloader u-boot-rpi-arm64-bootloader)
@@ -153,28 +155,24 @@
    (file-systems
     (append (list %rpi-root-file-system %rpi-boot-file-system)
             %base-file-systems))
-   (services (rpi-services rpi3-package))))
+   (services (rpi-services))))
 
 (define rpi3-barebones-os
-  (with-aarch64-workarounds rpi3-barebones-os-base
-    #:package-rewriter rpi3-package))
+  (with-build-policy rpi3-barebones-os-base %rpi3-build-policy))
 
 (define rpi4-barebones-os-base
   (operating-system
    (inherit rpi3-barebones-os-base)
    (host-name "raspberrypi4")
    (kernel-arguments %default-kernel-arguments)
-   (firmware (cons* (package-with-compilation-system linux-firmware-uncompressed)
+   (firmware (cons* linux-firmware-uncompressed
                     rpi4-bluetooth-firmware
                     %base-firmware))
    (packages %base-packages)
-   (essential-services
-    (rpi-essential-services this-operating-system rpi4-package))
-   (services (rpi-services rpi4-package))))
+   (services (rpi-services))))
 
 (define rpi4-barebones-os
-  (with-aarch64-workarounds rpi4-barebones-os-base
-    #:package-rewriter rpi4-package))
+  (with-build-policy rpi4-barebones-os-base %rpi4-build-policy))
 
 (define initialize-rpi-boot-partition
   ;; Firmware and U-Boot live on FAT. Guix installs extlinux.conf on root.

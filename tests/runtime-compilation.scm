@@ -22,6 +22,7 @@
              (spartan packages guile-config)
              (spartan packages guile-snarf)
              (spartan packages mixed)
+             (spartan system build-policy)
              (srfi srfi-1)
              (srfi srfi-64))
 
@@ -105,7 +106,9 @@
             (shepherd (shepherd-configuration-shepherd
                        (service-value (fold-services services
                                                      #:target-type shepherd-root-service-type)))))
-       (and (eq? guix (rpi2-package (@ (gnu packages package-management) guix)))
+       (and (eq? guix (build-policy-package
+                      (operating-system-build-policy os)
+                      (@ (gnu packages package-management) guix)))
             (every (lambda (key) (eq? guix ((@ (guix gexp) file-append-base) key)))
                    (guix-configuration-authorized-keys config))
             (every (lambda (p)
