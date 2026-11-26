@@ -3,6 +3,7 @@
   #:use-module (guix gexp)
   #:use-module (guix packages)
   #:use-module (guix utils)
+  #:use-module (spartan packages go)
   #:export (package-build-fix))
 
 ;; Source-build fallbacks for Guix 2bc642182.  These procedures do no store I/O:
@@ -13,6 +14,9 @@
          (string=? (package-version base) version)))
   (define armhf? (string=? system "armhf-linux"))
   (cond
+   ((and (%current-target-system)
+         (is? "prometheus-node-exporter" "1.10.2"))
+    (go-with-cross-install base))
    ((is? "guile-avahi" "0.4.1")
     ;; Every test requires an external, already-running Avahi daemon.
     (package/inherit base
