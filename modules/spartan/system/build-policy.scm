@@ -48,14 +48,16 @@
                            (cortex-a53? #f) (mixed-packages '()))
   "Make an explicitly selected native-first OS build policy.
 SYSTEM is the OS output architecture; BUILD-SYSTEM is the runner architecture.
-Only MIXED-PACKAGES, Guile and its base consumers may cross-build on native-output
+MIXED-PACKAGES, Guile and its base consumers are cross-build roots on native-output
 misses.  Cortex-A53 is a required runtime fix, not a substitute-dependent fallback.
 Image tools use BUILD-SYSTEM with no runtime transformations."
   (let* ((system (gnu-triplet->nix-system system))
          (build-system (gnu-triplet->nix-system build-system)))
     (when (and cortex-a53? (not (string=? system "aarch64-linux")))
       (error "Cortex-A53 policy requires aarch64-linux" system))
-    (let* ((consumers (append (list guix shepherd-0.10 shepherd-1.0
+    ;; Guix reaches GLib through slirp4netns.  Keep it native rather than
+    ;; entering the unsupported Python-package cross-introspection chain.
+    (let* ((consumers (append (list shepherd-0.10 shepherd-1.0
                                    guile-ssh guile-readline sudo)
                              mixed-packages))
            (runtime

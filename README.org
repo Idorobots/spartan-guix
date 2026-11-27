@@ -450,8 +450,8 @@ The baselines explicitly select a policy from =(spartan system build-policy)=.
 Image assembly, including Guile, filesystem tools, =genimage= and QEMU, runs on
 the build host. The embedded OS remains a native target graph: ordinary ARM
 packages need target execution through a native builder, offloading or emulation.
-Only the kernel, uncompressed firmware, both Guile versions, Guix, Shepherd,
-Guile-SSH, Guile-Readline, sudo and explicitly added packages may cross-build.
+The kernel, uncompressed firmware, both Guile versions, Shepherd, Guile-SSH,
+Guile-Readline, sudo and explicitly added packages select cross-build roots.
 
 Extend a host after adding its services:
 

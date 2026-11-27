@@ -1,7 +1,6 @@
 (define-module (spartan packages guile)
   #:use-module ((gnu packages admin) #:select (shepherd-0.10 shepherd-1.0))
   #:use-module (gnu packages guile)
-  #:use-module ((gnu packages package-management) #:select (guix))
   #:use-module ((gnu packages ssh) #:select (guile-ssh))
   #:use-module ((guix config) #:select (%system))
   #:use-module (guix memoization)
@@ -12,7 +11,7 @@
   #:export (make-mixed-compilation-rewriter))
 
 (define %selective-consumers
-  (list guix shepherd-0.10 shepherd-1.0 guile-ssh guile-readline))
+  (list shepherd-0.10 shepherd-1.0 guile-ssh guile-readline))
 
 (define make-mixed-compilation-rewriter
   (memoize

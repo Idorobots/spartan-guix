@@ -31,7 +31,7 @@
 (define available? (@@ (spartan packages mixed) %native-outputs-available?))
 (available? (const #f))
 (define sdk-fixes (compose guile-with-native-snarf guile-with-native-config))
-(define consumers (list guix shepherd-0.10 shepherd-1.0 guile-ssh guile-readline))
+(define consumers (list shepherd-0.10 shepherd-1.0 guile-ssh guile-readline))
 (define selected (append (list guile-3.0 guile-3.0-latest) consumers))
 (define (rewriter runtime system)
   (make-mixed-compilation-rewriter #:runtime-system runtime #:system system
@@ -40,6 +40,10 @@
 (for-each
  (lambda (runtime)
    (let ((target (platform-system->target runtime)))
+     (test-assert (string-append runtime ": Guix remains native on a miss")
+       (let ((bag (package->bag ((rewriter runtime "x86_64-linux") guix)
+                                runtime #f)))
+         (and (string=? runtime (bag-system bag)) (not (bag-target bag)))))
      (test-assert (string-append runtime ": all selected packages cross-build on a miss")
        (every (lambda (base)
                 (let ((bag (package->bag ((rewriter runtime "x86_64-linux") base)
@@ -97,7 +101,7 @@
 (define pi2-systems
   (list rpi2-barebones-os (operating-system-for-image rpi2-barebones-raw-image)))
 
-(test-assert "Pi 2 Guix, signing keys and essential Shepherd retain routing after image conversion"
+(test-assert "Pi 2 Guix stays native with aligned keys while Shepherd and kernel stay mixed"
   (every
    (lambda (os)
      (let* ((services (operating-system-services os))
@@ -111,13 +115,16 @@
                       (@ (gnu packages package-management) guix)))
             (every (lambda (key) (eq? guix ((@ (guix gexp) file-append-base) key)))
                    (guix-configuration-authorized-keys config))
+            (let ((bag (package->bag guix "armhf-linux" #f)))
+              (and (string=? "armhf-linux" (bag-system bag))
+                   (not (bag-target bag))))
             (every (lambda (p)
                      (let ((bag (package->bag p "armhf-linux" #f)))
                        (and (string=? %system (bag-system bag))
                             (equal? (and (not (string=? %system "armhf-linux"))
                                          "arm-linux-gnueabihf")
                                     (bag-target bag)))))
-                   (list guix shepherd (operating-system-kernel os))))))
+                   (list shepherd (operating-system-kernel os))))))
    pi2-systems))
 
 (with-store store
@@ -131,13 +138,13 @@
          "armhf-linux"))))
   (test-assert "Pi 2 base profiles have consistent propagated libraries"
     (every collision-free? pi2-systems))
-  (test-assert "actual ARMHF Guile/Guix/Shepherd/kernel derivations execute on the selected runner"
+  (test-assert "actual ARMHF Guile/Shepherd/kernel derivations execute on the selected runner"
     (every (lambda (base)
              (let ((drv (package-derivation store
                                            ((rewriter "armhf-linux" "x86_64-linux") base)
                                            "armhf-linux" #:graft? #f)))
                (string=? "x86_64-linux" (derivation-system drv))))
-           (list guile-3.0-latest guix shepherd-1.0
+           (list guile-3.0-latest shepherd-1.0
                  (operating-system-kernel rpi2-barebones-os)))))
 
 (define runner (test-runner-current))

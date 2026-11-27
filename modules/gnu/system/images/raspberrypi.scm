@@ -49,6 +49,10 @@
                                  linux-firmware-uncompressed)
                            mixed-packages)))
 
+;; The Pi OS policies keep GLib (including glib-minimal), Avahi and Guix native.
+;; GLib/Avahi cannot use mixed compilation with the pinned cross-introspection
+;; graph: it needs unsupported Python-package cross builds.  Guix reaches that
+;; same graph through slirp4netns.  Do not add these to the mixed package set.
 (define %rpi2-build-policy (make-raspberry-pi-build-policy #:system "armhf-linux"))
 (define %rpi3-build-policy (make-raspberry-pi-build-policy #:cortex-a53? #t))
 (define %rpi4-build-policy (make-raspberry-pi-build-policy))

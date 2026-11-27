@@ -52,7 +52,7 @@
 (define* (cortex-package p #:key (system %system) (extra-mixed-packages '()))
   ((make-mixed-compilation-rewriter
     #:guile-transform cortex-guile-fixes #:system system
-    #:consumers (append (list guix shepherd-0.10 shepherd-1.0 guile-ssh guile-readline)
+    #:consumers (append (list shepherd-0.10 shepherd-1.0 guile-ssh guile-readline)
                         extra-mixed-packages)) p))
 (define guile-3.0/rpi3 (cortex-package guile-3.0))
 (define guile-3.0-latest/rpi3 (cortex-package guile-3.0-latest))
@@ -131,7 +131,7 @@
     (and (string=? "aarch64-linux" (bag-system bag))
          (not (bag-target bag)))))
 
-(define selective-consumers (list guix shepherd-0.10 shepherd-1.0 guile-ssh guile-readline))
+(define selective-consumers (list shepherd-0.10 shepherd-1.0 guile-ssh guile-readline))
 
 (test-assert "selected consumers cross-build on x86 and build natively on AArch64"
   (every
@@ -160,22 +160,18 @@
                    (lookup-package-input p "guile")))))
      selective-consumers)))
 
-(test-assert "Guix propagates cross-built SSH separately from its native build-time SSH"
-  (let* ((p (cortex-package guix #:system "x86_64-linux"))
-         (runtime
-          (parameterize ((%current-system "aarch64-linux") (%current-target-system #f))
-            (lookup-package-propagated-input p "guile-ssh")))
-         (build
-          (parameterize ((%current-system "x86_64-linux")
-                         (%current-target-system "aarch64-linux-gnu"))
-            (lookup-package-native-input p "guile-ssh")))
-         (runtime-bag (package->bag runtime "aarch64-linux" #f))
-         (build-bag (package->bag build "x86_64-linux" #f)))
-    (and (eq? guile-ssh build)
-         (string=? "x86_64-linux" (bag-system runtime-bag))
-         (string=? "aarch64-linux-gnu" (bag-target runtime-bag))
-         (string=? "x86_64-linux" (bag-system build-bag))
-         (not (bag-target build-bag)))))
+(test-assert "native Guix aligns its runtime and build-time SSH while retaining routed Guile"
+  (parameterize ((%current-system "aarch64-linux") (%current-target-system #f))
+    (let* ((p (cortex-package guix #:system "x86_64-linux"))
+           (runtime (lookup-package-propagated-input p "guile-ssh"))
+           (build (lookup-package-native-input p "guile-ssh"))
+           (bag (package->bag p "aarch64-linux" #f))
+           (ssh-bag (package->bag runtime "aarch64-linux" #f)))
+      (and (eq? runtime build)
+           (string=? "aarch64-linux" (bag-system bag))
+           (not (bag-target bag))
+           (string=? "x86_64-linux" (bag-system ssh-bag))
+           (string=? "aarch64-linux-gnu" (bag-target ssh-bag))))))
 
 (test-assert "Shepherd propagates target Fibers separately from native build-time Fibers"
   (parameterize ((%current-system "aarch64-linux") (%current-target-system #f))
