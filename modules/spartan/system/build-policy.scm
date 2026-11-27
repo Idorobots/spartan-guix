@@ -24,6 +24,8 @@
   #:use-module (spartan packages guile-config)
   #:use-module (spartan packages guile-snarf)
   #:use-module (spartan packages mixed)
+  #:use-module (spartan services klipper)
+  #:use-module (spartan services moonraker)
   #:use-module (spartan services nut)
   #:use-module (spartan services spartan-sensor-mesh)
   #:use-module (srfi srfi-1)
@@ -115,6 +117,12 @@ Image tools use BUILD-SYSTEM with no runtime transformations."
   "Attach POLICY and route OS packages, firmware, kernel and service packages.
 Reapplying a policy replaces the old policy rather than composing board fixes."
   (define (rewrite p) (build-policy-package policy p))
+  ;; TODO: Replace service-specific cases with policy-aware output boundaries:
+  ;; select profile packages before manifest construction so propagated inputs
+  ;; and search paths agree, and route script/configuration package references
+  ;; through the OS-scoped gexp compiler.  Keep image tools in the build role
+  ;; and preserve native-first selection.  Walking configuration records alone
+  ;; cannot cover package references hidden in procedures or delayed values.
   (define (rewrite-service s)
     (let ((config (service-value s)))
       (cond
@@ -156,6 +164,14 @@ Reapplying a policy replaces the old policy rather than composing board fixes."
         (service upsd-service-type
                  (upsd-configuration (inherit config)
                    (package (rewrite (upsd-configuration-package config))))))
+       ((eq? (service-kind s) klipper-service-type)
+        (service klipper-service-type
+                 (klipper-configuration (inherit config)
+                   (package (rewrite (klipper-configuration-package config))))))
+       ((eq? (service-kind s) moonraker-service-type)
+        (service moonraker-service-type
+                 (moonraker-configuration (inherit config)
+                   (package (rewrite (moonraker-configuration-package config))))))
        ((eq? (service-kind s) spartan-sensor-mesh-service-type)
         (service spartan-sensor-mesh-service-type
                  (spartan-sensor-mesh-configuration (inherit config)
@@ -167,7 +183,11 @@ Reapplying a policy replaces the old policy rather than composing board fixes."
     (firmware (map rewrite (operating-system-firmware os)))
     (packages (map rewrite (operating-system-packages os)))
     (essential-services
-     (modify-services (operating-system-essential-services os)
+     ;; Refer to the inherited thunk with the new OS as its self-reference.
+     ;; Evaluating the accessor on OS would freeze firmware, kernel, profile,
+     ;; accounts and OS-derived files on the old record, including during later
+     ;; inheritance/image conversion.  Keep user essential-service extensions.
+     (modify-services essential-services
        (shepherd-root-service-type config =>
          (shepherd-configuration (inherit config)
            (shepherd (rewrite (shepherd-configuration-shepherd config)))))))
