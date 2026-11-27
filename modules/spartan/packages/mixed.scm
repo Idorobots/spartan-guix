@@ -78,12 +78,16 @@ platform.  This keeps recipe fixes inside the lowerer's captured recipe."
      #:deep? #f))
   rewrite)
 
-(define (make-native-first-package-mapper transform)
+(define* (make-native-first-package-mapper transform
+                                          #:key (select-package
+                                                 (lambda (p system target) p)))
   "Return two procedures: a lazy native-first mapper and its ownership predicate.
 TRANSFORM takes a recipe and its output system.  An exact native hit retains the
 entire original graph.  Only a miss visits explicit and implicit fallback inputs.
 Compilation adapters are retained, so each input is selected in its own eventual
-native/cross context, rather than the enclosing image's architecture."
+native/cross context, rather than the enclosing image's architecture.
+SELECT-PACKAGE may select an adapter for a newly encountered fallback dependency;
+it runs only after the original native-output check misses."
   (define owned (make-weak-key-hash-table))
   (define (owns? p)
     (or (hashq-ref owned p)
@@ -123,7 +127,10 @@ native/cross context, rather than the enclosing image's architecture."
                     (if (and (not target)
                              (native-package-outputs-available? base system))
                         base
-                        (fallback base system target))))))
+                         (let ((selected (select-package base system target)))
+                           (if (eq? base selected)
+                               (fallback base system target)
+                               (rewrite selected))))))))
              (define selected
                (if adapter
                    ;; Keep the original candidate outside the fallback adapter.

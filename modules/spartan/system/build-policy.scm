@@ -55,7 +55,10 @@ Image tools use BUILD-SYSTEM with no runtime transformations."
          (build-system (gnu-triplet->nix-system build-system)))
     (when (and cortex-a53? (not (string=? system "aarch64-linux")))
       (error "Cortex-A53 policy requires aarch64-linux" system))
-    (let ((runtime
+    (let* ((consumers (append (list guix shepherd-0.10 shepherd-1.0
+                                   guile-ssh guile-readline sudo)
+                             mixed-packages))
+           (runtime
            (make-mixed-compilation-rewriter
             #:runtime-system system #:system build-system
             #:guile-transform
@@ -63,11 +66,22 @@ Image tools use BUILD-SYSTEM with no runtime transformations."
                 (compose guile-with-cortex-a53-fix
                          guile-with-native-snarf guile-with-native-config)
                 (compose guile-with-native-snarf guile-with-native-config))
-            #:consumers (append (list guix shepherd-0.10 shepherd-1.0
-                                      guile-ssh guile-readline sudo)
-                                mixed-packages))))
+            #:consumers consumers)))
       (call-with-values
-          (lambda () (make-native-first-package-mapper package-build-fix))
+          (lambda ()
+            (make-native-first-package-mapper
+             package-build-fix
+             #:select-package
+             (lambda (p destination target)
+               ;; Dependencies reached only through native/implicit build inputs
+               ;; have not necessarily passed through the runtime rewriter yet.
+               ;; Match the original object before rewriting, just as at roots.
+               ;; Cross requests already have a compilation adapter's recipe.
+               (if (and (not target) (not (string=? system build-system))
+                        (string=? destination system)
+                        (memq p consumers))
+                   (runtime p)
+                   p))))
         (lambda (fallback owns?)
           (define (remember base selected)
             (hashq-set! %original-packages selected base)
