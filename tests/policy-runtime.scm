@@ -7,6 +7,7 @@
              (gnu packages gnupg)
              (gnu packages guile)
              (gnu packages linux)
+             (gnu packages python-build)
              (gnu packages python-xyz)
              (gnu packages xml)
              (gnu services shepherd)
@@ -91,6 +92,88 @@
         (object->string
          (package-arguments (package-build-fix gobject-introspection "x86_64-linux")))
         "-Dlibdir=lib")))
+
+(test-assert "cross-built full GLib enables target introspection for native consumers"
+  (parameterize ((%current-system "x86_64-linux")
+                 (%current-target-system "arm-linux-gnueabihf"))
+    (let* ((fixed (package-build-fix glib "armhf-linux"))
+           (bag (package->bag fixed "x86_64-linux" "arm-linux-gnueabihf" #:graft? #f))
+           (arguments (object->string (bag-arguments bag))))
+      (and (lookup-package-input fixed "gobject-introspection")
+           (lookup-package-native-input fixed "gobject-introspection")
+           (string=? "x86_64-linux" (bag-system bag))
+           (string=? "arm-linux-gnueabihf" (bag-target bag))
+           (string-contains arguments "-Dintrospection=enabled")
+           (string-contains arguments "needs_exe_wrapper = false")
+           (string-contains arguments "-Dlibdir=lib")))))
+
+(test-assert "cross-built bootstrap GLib does not acquire an introspection cycle"
+  (parameterize ((%current-system "x86_64-linux")
+                 (%current-target-system "arm-linux-gnueabihf"))
+    (let ((fixed (package-build-fix (@@ (gnu packages glib) glib-minimal)
+                                    "armhf-linux")))
+      (and (not (lookup-package-input fixed "gobject-introspection"))
+           (not (string-contains (object->string (package-arguments fixed))
+                                 "-Dintrospection=enabled"))))))
+
+(for-each
+ (lambda (target)
+   (test-assert (string-append target ": setuptools fallback has build-machine Python")
+     (call-with-values
+         (lambda () (make-native-first-package-mapper package-build-fix))
+       (lambda (rewrite owns?)
+         (let* ((bag (package->bag (rewrite python-setuptools-bootstrap)
+                                  "x86_64-linux" target #:graft? #f))
+                (python (assoc-ref (bag-build-inputs bag) "python")))
+           ;; Exercise fallback dispatch and GNU input classification, not just
+           ;; the fixed package's fields: only build inputs go on cross PATH.
+           (and (string=? "x86_64-linux" (bag-system bag))
+                (string=? target (bag-target bag))
+                python
+                (string=? "python-wrapper" (package-name (car python)))
+                (assoc "python-wrapper" (bag-host-inputs bag))))))))
+ '("arm-linux-gnueabihf" "aarch64-linux-gnu"))
+
+(test-assert "native setuptools bootstrap keeps the upstream recipe"
+  (every (lambda (system)
+           (parameterize ((%current-system system) (%current-target-system #f))
+             (eq? python-setuptools-bootstrap
+                  (package-build-fix python-setuptools-bootstrap system))))
+         '("armhf-linux" "aarch64-linux" "x86_64-linux")))
+
+(for-each
+ (lambda (target)
+   (test-assert (string-append target ": introspection variants have native setuptools")
+     (parameterize ((%current-system "x86_64-linux")
+                    (%current-target-system target))
+       (every
+        (lambda (base)
+          (let* ((setuptools (lookup-package-propagated-input
+                             base "python-setuptools-bootstrap"))
+                 (fixed (package-build-fix base (gnu-triplet->nix-system target)))
+                 (bag (package->bag fixed "x86_64-linux" target #:graft? #f)))
+            (and (eq? setuptools
+                      (car (assoc-ref (bag-build-inputs bag)
+                                      "python-setuptools-bootstrap")))
+                 (eq? setuptools
+                      (lookup-package-propagated-input
+                       fixed "python-setuptools-bootstrap"))
+                 (string-contains (object->string (bag-arguments bag))
+                                  "-Dlibdir=lib")
+                 (string-contains (object->string (bag-arguments bag))
+                                  "-Dbuild_introspection_data=false"))))
+        (list (@@ (gnu packages glib) gobject-introspection-minimal)
+              gobject-introspection)))))
+ '("arm-linux-gnueabihf" "aarch64-linux-gnu"))
+
+(test-assert "native introspection variants retain their original build inputs"
+  (parameterize ((%current-system "x86_64-linux") (%current-target-system #f))
+    (every (lambda (base)
+             (equal? (package-native-inputs base)
+                     (package-native-inputs
+                      (package-build-fix base "x86_64-linux"))))
+           (list (@@ (gnu packages glib) gobject-introspection-minimal)
+                 gobject-introspection))))
 
 (test-assert "EXSLT crypto remains enabled under the ARM policy"
   (lookup-package-input (build-policy-package %rpi2-build-policy libxslt) "libgcrypt"))

@@ -2,6 +2,7 @@
   #:use-module ((gnu packages gettext) #:select (gettext-minimal))
   #:use-module (guix gexp)
   #:use-module (guix packages)
+  #:use-module (guix platform)
   #:use-module (guix utils)
   #:use-module (spartan packages go)
   #:export (package-build-fix))
@@ -17,6 +18,15 @@
    ((and (%current-target-system)
          (is? "prometheus-node-exporter" "1.10.2"))
     (go-with-cross-install base))
+   ((and (%current-target-system)
+         (is? "python-setuptools-bootstrap" "80.9.0"))
+    ;; The GNU bootstrap phases run "python setup.py", but upstream provides
+    ;; python-wrapper only as a target input.  Cross builds need an interpreter
+    ;; on the build machine's PATH as well.  Reuse the recipe's Python version.
+    (package/inherit base
+      (native-inputs
+       (cons (list "python" (lookup-package-input base "python-wrapper"))
+             (package-native-inputs base)))))
    ((is? "guile-avahi" "0.4.1")
     ;; Every test requires an external, already-running Avahi daemon.
     (package/inherit base
@@ -28,6 +38,52 @@
     (package/inherit base
       (native-inputs (cons (list "gettext" gettext-minimal)
                            (package-native-inputs base)))))
+   ((and (%current-target-system)
+         (or armhf? (string=? system "aarch64-linux"))
+         (is? "glib" "2.86.0")
+         (lookup-package-native-input base "gobject-introspection"))
+    ;; The full GLib must provide GIRs to native consumers such as Poppler.
+    ;; Upstream silently omits them when Meson cannot run target binaries.
+    ;; The bootstrap GLib deliberately has no introspection dependency.
+    (package/inherit base
+      (inputs
+       (cons (list "gobject-introspection"
+                   (@@ (gnu packages glib) gobject-introspection-minimal))
+             (package-inputs base)))
+      (arguments
+       (substitute-keyword-arguments (package-arguments base)
+         ((#:configure-flags flags #~'())
+          #~(append (list "-Dlibdir=lib" "-Dintrospection=enabled" "-Dtests=false"
+                          "--cross-file=../glib-introspection.ini")
+                    #$flags))
+         ((#:phases phases #~%standard-phases)
+          #~(modify-phases #$phases
+              (add-before 'configure 'enable-cross-introspection
+                (lambda* (#:key inputs #:allow-other-keys)
+                  ;; The opted-in image build already requires transparent
+                  ;; target execution.  Only GIR probes need it here; Meson's
+                  ;; compiler commands remain those of the Guix cross file.
+                  ;; Both the source and build directories are under this root.
+                  (call-with-output-file "../glib-introspection.ini"
+                    (lambda (port)
+                      (display "[properties]\nneeds_exe_wrapper = false\n" port)))
+                  ;; The native scanner's ldd would select the runner's loader.
+                  ;; Resolve target shared libraries with the target loader.
+                  (let ((wrapper (string-append (getcwd) "/cross-gir-ldd"))
+                        (loader (search-input-file
+                                 inputs
+                                 #$(platform-glibc-dynamic-linker
+                                    (lookup-platform-by-target
+                                     (%current-target-system))))))
+                    (call-with-output-file wrapper
+                      (lambda (port)
+                        (format port "#!~a\nexec ~s --list \"$@\"\n"
+                                (which "sh") loader)))
+                    (chmod wrapper #o755)
+                    (substitute* "meson.build"
+                      (("gir_args = \\[")
+                       (string-append "gir_args = ['--use-ldd-wrapper="
+                                      wrapper "',"))))))))))))
    ((and armhf? (is? "glib" "2.86.0"))
     (package/inherit base
       (arguments
@@ -46,9 +102,23 @@
                                  "gio/tests/gsubprocess.c")
                     (("[ \t]*g_test_add_func.*\"/(thread/thread4|thread_pool/pool_fail|gsubprocess/exit-status/trapped)\".*;")
                      ""))))))))))
+   ((is? "gobject-introspection" "1.86.0")
+    (package/inherit base
+      (native-inputs
+       (if (%current-target-system)
+           ;; Meson's Python >= 3.12 probe imports setuptools on the build
+           ;; machine.  Target propagated inputs are not on its module path.
+           ;; Retain the recipe's bootstrap/full variant to avoid a cycle.
+           (cons (list "python-setuptools-bootstrap"
+                       (lookup-package-propagated-input
+                        base "python-setuptools-bootstrap"))
+                 (package-native-inputs base))
+           (package-native-inputs base)))
+      (arguments
+       (substitute-keyword-arguments (package-arguments base)
+         ((#:configure-flags flags #~'()) #~(cons "-Dlibdir=lib" #$flags))))))
    ((or (is? "harfbuzz" "11.4.4")
         (is? "cairo" "1.18.4")
-        (is? "gobject-introspection" "1.86.0")
         (and armhf?
              (or (is? "linux-pam" "1.7.2")
                  (is? "dbus" "1.16.2"))))
