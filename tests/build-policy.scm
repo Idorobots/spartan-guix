@@ -44,6 +44,36 @@
     (parameterize ((%graft? #f))
       (run-with-store store (lower-object p system #:target #f))))
 
+  (for-each
+   (lambda (already-selected?)
+     (test-assert
+         (string-append "active OS policy preserves a native hit's builder references"
+                        (if already-selected? " (selected)" " (unselected)"))
+       (let* ((suffix (if already-selected? "selected" "unselected"))
+              (child (fixture (string-append "native-hit-gexp-child-" suffix)))
+              (base (package
+                      (inherit (fixture (string-append "native-hit-gexp-parent-" suffix)))
+                      ;; This dependency exists only in the builder gexp.
+                      (arguments (list #:builder #~(begin #$child (mkdir #$output))))))
+              (policy (make-raspberry-pi-build-policy
+                       #:mixed-packages (list base child)))
+              (queries '()))
+         (parameterize ((available? (lambda (p candidate system)
+                                     (set! queries (cons (%active-build-policy) queries))
+                                     (eq? p base))))
+           (let* ((p (if already-selected? (build-policy-package policy base) base))
+                  (selected (parameterize ((%active-build-policy policy))
+                              (lower p "aarch64-linux")))
+                  ;; Use a separate store cache: deriving the upstream graph
+                  ;; first in STORE would hide the policy leak being tested.
+                  (upstream (with-store original-store
+                              (package-derivation original-store base "aarch64-linux"
+                                                  #:graft? #f))))
+             (and (pair? queries) (every not queries)
+                  (string=? (derivation-file-name upstream)
+                            (derivation-file-name selected))))))))
+   '(#t #f))
+
   (test-assert "a native hit cuts off all fallback dependency transformations"
     (let* ((child (fixture "hit-child"))
            (base (fixture "hit-parent" (list child)))

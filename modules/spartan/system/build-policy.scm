@@ -192,16 +192,21 @@ Reapplying a policy replaces the old policy rather than composing board fixes."
   compiler =>
   (lambda (p system target)
     (let ((policy (%active-build-policy)))
-      (%package-compiler
-       (if (or (not policy) ((build-policy-owns? policy) p))
-           p
-           (build-policy-package
-            policy p
-            #:role (if (and (eq? (%build-role) 'runtime)
-                            (string=? (gnu-triplet->nix-system (or target system))
-                                      (build-policy-system policy)))
-                       'runtime 'build)))
-       system target)))
+      ;; Select at the OS gexp boundary, then let the package mapper own its
+      ;; dependency graph.  Leaving the OS dispatcher active inside a recipe
+      ;; changes even an upstream native hit (and its availability query).
+      ;; Scope both construction and execution of the lazy store computation.
+      (state-parameterize ((%active-build-policy #f))
+        (%package-compiler
+         (if (or (not policy) ((build-policy-owns? policy) p))
+             p
+             (build-policy-package
+              policy p
+              #:role (if (and (eq? (%build-role) 'runtime)
+                              (string=? (gnu-triplet->nix-system (or target system))
+                                        (build-policy-system policy)))
+                         'runtime 'build)))
+         system target))))
   expander => %package-expander)
 
 (define-gexp-compiler policy-os-compiler

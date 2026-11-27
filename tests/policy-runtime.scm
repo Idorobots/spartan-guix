@@ -18,6 +18,7 @@
              (guix derivations)
              (guix gexp)
              (guix grafts)
+             (guix monads)
              (guix packages)
              (guix profiles)
              (guix store)
@@ -32,6 +33,24 @@
 (define (a53-flags? p system)
   (parameterize ((%current-system system) (%current-target-system #f))
     (string-contains (object->string (package-arguments p)) "--fix-cortex-a53-843419")))
+
+(test-assert "Pi 3 kernel native hit keeps the upstream derivation under the active OS policy"
+  (let* ((base (@ (nongnu packages linux) linux-arm64-generic))
+         (policy (make-raspberry-pi-build-policy #:cortex-a53? #t)))
+    (parameterize (((@@ (spartan packages mixed) %native-outputs-available?)
+                    (lambda (p candidate system) (eq? p base))))
+      (let* ((selected
+              (with-store store
+                (parameterize ((%graft? #f) (%active-build-policy policy))
+                  (run-with-store store
+                    (lower-object (build-policy-package policy base)
+                                  "aarch64-linux" #:target #f)))))
+             ;; Do not prime the selected derivation's store cache upstream.
+             (upstream
+              (with-store store
+                (package-derivation store base "aarch64-linux" #:graft? #f))))
+        (string=? (derivation-file-name upstream)
+                  (derivation-file-name selected))))))
 
 (for-each
  (lambda (os system cortex?)
