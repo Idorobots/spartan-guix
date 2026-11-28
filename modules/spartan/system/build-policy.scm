@@ -207,11 +207,13 @@ Reapplying a policy replaces the old policy rather than composing board fixes."
   ;; before the OS dispatcher sees them.  Recipe lowering then switches back to
   ;; the unmodified context or to its own fallback mapper as appropriate.
   (memoize (lambda (policy) (lambda (p) p))))
+(define with-lowering-parameters
+  (@@ (spartan packages mixed) with-lowering-parameters))
 (define (call-with-build-policy policy thunk)
   ((@@ (spartan packages mixed) with-package-mapper)
    (policy-cache-context policy)
    (lambda ()
-     (state-parameterize ((%active-build-policy policy)) (thunk)))))
+     (with-lowering-parameters (list %active-build-policy) (list policy) thunk))))
 (define %package-compiler ((@@ (guix gexp) lookup-compiler) guix))
 (define %package-expander ((@@ (guix gexp) lookup-expander) guix))
 (define %os-compiler
@@ -226,17 +228,18 @@ Reapplying a policy replaces the old policy rather than composing board fixes."
       ;; dependency graph.  Leaving the OS dispatcher active inside a recipe
       ;; changes even an upstream native hit (and its availability query).
       ;; Scope both construction and execution of the lazy store computation.
-      (state-parameterize ((%active-build-policy #f))
-        (%package-compiler
-         (if (or (not policy) ((build-policy-owns? policy) p))
-             p
-             (build-policy-package
-              policy p
-              #:role (if (and (eq? (%build-role) 'runtime)
-                              (string=? (gnu-triplet->nix-system (or target system))
-                                        (build-policy-system policy)))
-                         'runtime 'build)))
-         system target))))
+      (with-lowering-parameters (list %active-build-policy) (list #f)
+        (lambda ()
+          (%package-compiler
+           (if (or (not policy) ((build-policy-owns? policy) p))
+               p
+               (build-policy-package
+                policy p
+                #:role (if (and (eq? (%build-role) 'runtime)
+                                (string=? (gnu-triplet->nix-system (or target system))
+                                          (build-policy-system policy)))
+                           'runtime 'build)))
+           system target)))))
   expander => %package-expander)
 
 (define-gexp-compiler policy-os-compiler
@@ -247,8 +250,8 @@ Reapplying a policy replaces the old policy rather than composing board fixes."
       (if policy
           (call-with-build-policy policy
             (lambda ()
-              (state-parameterize ((%build-role 'runtime))
-                (%os-compiler os (build-policy-system policy) #f))))
+              (with-lowering-parameters (list %build-role) (list 'runtime)
+                (lambda () (%os-compiler os (build-policy-system policy) #f)))))
           (%os-compiler os system target))))
   expander => (@@ (guix gexp) default-expander))
 
@@ -260,10 +263,10 @@ Reapplying a policy replaces the old policy rather than composing board fixes."
     (if policy
         (call-with-build-policy policy
           (lambda ()
-            (state-parameterize ((%build-role 'runtime)
-                                (%current-system (build-policy-system policy))
-                                (%current-target-system #f))
-              (original-operating-system-derivation os))))
+            (with-lowering-parameters
+             (list %build-role %current-system %current-target-system)
+             (list 'runtime (build-policy-system policy) #f)
+             (lambda () (original-operating-system-derivation os)))))
         (original-operating-system-derivation os))))
 
 (module-set! (resolve-module '(gnu system)) 'operating-system-derivation

@@ -20,6 +20,7 @@
              (spartan packages mixed)
              (spartan system build-policy)
              (srfi srfi-1)
+             (srfi srfi-9)
              (srfi srfi-64))
 
 (define available? (@@ (spartan packages mixed) %native-outputs-available?))
@@ -36,6 +37,25 @@
     (arguments (list #:builder #~(mkdir #$output)))
     (home-page "https://example.org") (synopsis "Policy fixture")
     (description "Derivation-only build-policy fixture.") (license #f)))
+
+;; Model graft analysis yielding to Guix's build accumulator.  The handler below
+;; resumes the request without executing it; this compiler needs no build output.
+(define-record-type <build-pause>
+  (build-pause package inspect) build-pause?
+  (package build-pause-package) (inspect build-pause-inspect))
+(define-gexp-compiler build-pause-compiler <build-pause>
+  compiler =>
+  (lambda (pause system target)
+    (lambda (store)
+      (let ((drv (package-derivation store (build-pause-package pause) system #:graft? #f))
+            (policy (%active-build-policy))
+            (mapper ((@@ (spartan packages mixed) %active-package-mapper))))
+        (build-things store (list (derivation-file-name drv)))
+        ((build-pause-inspect pause)
+         (and (eq? policy (%active-build-policy))
+              (eq? mapper ((@@ (spartan packages mixed) %active-package-mapper)))))
+        (values "resumed" store))))
+  expander => (@@ (guix gexp) default-expander))
 
 (with-store store
   (define (drv p system)
@@ -108,6 +128,43 @@
                    (map derivation-input-path (derivation-inputs selected)))
            (string=? (derivation-file-name upstream)
                      (derivation-file-name (lower reference "aarch64-linux"))))))
+
+  (for-each
+   (lambda (hit?)
+     (test-assert (string-append "a suspended " (if hit? "native hit" "fallback")
+                                 " restores the handler's policy and its own resumed context")
+       (let* ((suffix (if hit? "hit" "miss"))
+              (resumed? #f)
+              (pause (build-pause (fixture (string-append "policy-pause-request-" suffix))
+                                  (lambda (same?) (set! resumed? same?))))
+              (first (package (inherit (fixture (string-append "policy-pausing-" suffix)))
+                       (arguments (list #:builder #~(begin #$pause (mkdir #$output))))))
+              (second (fixture (string-append "policy-after-pause-" suffix)))
+              (policy (make-raspberry-pi-build-policy #:mixed-packages (list second)))
+              (requests 0) (handler-policy #f) (sibling #f))
+         (parameterize ((available? (lambda (p candidate system) (and hit? (eq? p first))))
+                        (%graft? #f))
+           (run-with-store store
+             ((@@ (spartan system build-policy) call-with-build-policy) policy
+              (lambda ()
+                (lambda (store)
+                  (with-build-handler
+                   (lambda (continue store things mode)
+                     (set! requests (+ requests 1))
+                     (set! handler-policy (%active-build-policy))
+                     (set! sibling
+                           (run-with-store store
+                             (lower-object second "aarch64-linux" #:target #f)))
+                     (continue #f))
+                   ((lower-object first "aarch64-linux" #:target #f) store))))))
+           (let ((expected (package-cross-derivation store second "aarch64-linux-gnu"
+                                                    "x86_64-linux" #:graft? #f)))
+             (and (positive? requests) resumed?
+                  (eq? policy handler-policy)
+                  (not (%active-build-policy))
+                  (not ((@@ (spartan packages mixed) %active-package-mapper)))
+                  (string=? (derivation-file-name expected) (derivation-file-name sibling))))))))
+   '(#t #f))
 
   (test-assert "a parent miss retains an available child without rewriting it"
     (let* ((child (fixture "retained-child"))

@@ -35,6 +35,18 @@
 (define %mapper-cache-id (allocate-store-connection-cache 'native-first-lowering))
 (define %object-cache-id (@@ (guix store) %object-cache-id))
 
+(define (with-lowering-parameters parameters values thunk)
+  ;; Build accumulation suspends and resumes lowering through delimited
+  ;; continuations.  Restore the caller's context on suspension and reinstall
+  ;; this context on resumption, instead of leaving parameters globally changed
+  ;; until the monadic computation eventually completes.
+  (lambda (store)
+    (let ((previous #f))
+      (dynamic-wind
+        (lambda () (set! previous (map (lambda (p value) (p value)) parameters values)))
+        (lambda () ((thunk) store))
+        (lambda () (for-each (lambda (p value) (p value)) parameters previous))))))
+
 (define (with-package-mapper mapper thunk)
   ;; Guix 2bc642182 keys its shared object cache by object/system/target/graft?,
   ;; not by the dynamic compiler context.  Isolate that cache per mapper, also
@@ -49,7 +61,7 @@
       (#f vlist-null)))
   (lambda (store)
     (let* ((previous (%active-package-mapper))
-           (mval (state-parameterize ((%active-package-mapper mapper)) (thunk))))
+           (mval (with-lowering-parameters (list %active-package-mapper) (list mapper) thunk)))
       (if (eq? previous mapper)
           (mval store)
           (let* ((contexts (remember previous
