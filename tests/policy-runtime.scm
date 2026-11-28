@@ -123,6 +123,26 @@
 (test-assert "EXSLT crypto remains enabled under the ARM policy"
   (lookup-package-input (build-policy-package %rpi2-build-policy libxslt) "libgcrypt"))
 
+(test-assert "Linux-PAM's embedded DocBook reference uses the patched ARM crypto graph"
+  (with-store store
+    (let* ((original (derivation-file-name
+                      (package-derivation store libgpg-error "armhf-linux" #:graft? #f)))
+           (patched (derivation-file-name
+                     (package-derivation store (package-build-fix libgpg-error "armhf-linux")
+                                         "armhf-linux" #:graft? #f)))
+           (seen (make-hash-table)))
+      (define (visit drv)
+        (let ((name (derivation-file-name drv)))
+          (unless (hash-ref seen name)
+            (hash-set! seen name #t)
+            (for-each (lambda (input) (visit (derivation-input-derivation input)))
+                      (derivation-inputs drv)))))
+      (parameterize ((%graft? #f) (%active-build-policy %rpi2-build-policy))
+        (visit (run-with-store store
+                 (lower-object (build-policy-package %rpi2-build-policy linux-pam)
+                               "armhf-linux" #:target #f))))
+      (and (hash-ref seen patched) (not (hash-ref seen original))))))
+
 (define runner (test-runner-current))
 (test-end "policy-runtime")
 (exit (if (zero? (test-runner-fail-count runner)) 0 1))

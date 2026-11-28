@@ -2,8 +2,10 @@
   #:use-module (guix build-system)
   #:use-module ((guix config) #:select (%system))
   #:use-module (guix derivations)
+  #:use-module (guix gexp)
   #:use-module (guix grafts)
   #:use-module (guix memoization)
+  #:use-module (guix monads)
   #:use-module (guix packages)
   #:use-module (guix platform)
   #:use-module (guix store)
@@ -21,6 +23,23 @@
 ;; the outer package would leave the recipe captured by its lowerer unchanged.
 (define %compilation-packages (make-weak-key-hash-table))
 (define %compilation-fallbacks (make-weak-key-hash-table))
+
+;; A fallback bag can reference packages only through its builder gexps (for
+;; example Linux-PAM's configure flags capture an upstream DocBook file-append).
+;; Route those references too, but suspend the mapper while lowering each chosen
+;; package: a native hit must retain its entire original graph.  Only another
+;; fallback bag re-enables mapping, in its own native/cross build context.
+(define %active-package-mapper (make-parameter #f))
+(define %package-compiler
+  ((@@ (guix gexp) gexp-compiler-lower) (@@ (guix packages) package-compiler)))
+(define-gexp-compiler fallback-package-compiler (@@ (guix packages) <package>)
+  compiler =>
+  (lambda (p system target)
+    (let ((rewrite (%active-package-mapper)))
+      (state-parameterize ((%active-package-mapper #f))
+        (%package-compiler (if rewrite (rewrite p) p) system target))))
+  expander =>
+  ((@@ (guix gexp) gexp-compiler-expand) (@@ (guix packages) package-compiler)))
 
 (define (map-compilation-package transform package)
   "Apply TRANSFORM to PACKAGE's recipe, retaining any compilation adapters."
@@ -105,7 +124,11 @@ it runs only after the original native-output check misses."
             (inherit lowered)
             (build-inputs (map input (bag-build-inputs lowered)))
             (host-inputs (map input (bag-host-inputs lowered)))
-            (target-inputs (map input (bag-target-inputs lowered))))))
+            (target-inputs (map input (bag-target-inputs lowered)))
+            (build
+             (lambda args
+               (state-parameterize ((%active-package-mapper rewrite))
+                 (apply (bag-build lowered) args)))))))
       (package
         (inherit fixed)
         (inputs (map input (package-inputs fixed)))
@@ -167,6 +190,7 @@ it runs only after the original native-output check misses."
   ;; disabled for this query; normal grafting of the chosen package is unchanged.
   (parameterize ((%current-system system)
                  (%current-target-system #f)
+                 (%active-package-mapper #f)
                  (%graft? #f))
     (let* ((drv (package-derivation store package system #:graft? #f))
            (paths (map (lambda (output) (derivation-output-path (cdr output)))
@@ -186,6 +210,7 @@ it runs only after the original native-output check misses."
        ;; candidate must match them exactly or the resulting profile diverges.
        (parameterize ((%current-system system)
                       (%current-target-system #f)
+                      (%active-package-mapper #f)
                       (%graft? #f))
          (string=?
           (derivation-file-name
