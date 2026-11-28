@@ -89,7 +89,25 @@
               (and (null? queries) (null? calls)
                    (string=? (derivation-file-name (drv base "x86_64-linux"))
                              (derivation-file-name (drv p "x86_64-linux")))
-                   (null? calls) (equal? queries '("hit-parent")))))))))
+                    (null? calls) (equal? queries '("hit-parent")))))))))
+
+  (test-assert "OS policy lowering does not reuse a cached unselected service reference"
+    (let* ((child (fixture "cached-os-service-child"))
+           (reference (computed-file "cached-os-service-reference"
+                        #~(begin #$(file-append child "/payload") (mkdir #$output))))
+           (policy (make-raspberry-pi-build-policy #:mixed-packages (list child)))
+           (upstream (lower reference "aarch64-linux"))
+           (selected
+            (parameterize ((%graft? #f))
+              (run-with-store store
+                ((@@ (spartan system build-policy) call-with-build-policy) policy
+                 (lambda () (lower-object reference "aarch64-linux" #:target #f))))))
+           (expected (package-cross-derivation store child "aarch64-linux-gnu"
+                                                "x86_64-linux" #:graft? #f)))
+      (and (member (derivation-file-name expected)
+                   (map derivation-input-path (derivation-inputs selected)))
+           (string=? (derivation-file-name upstream)
+                     (derivation-file-name (lower reference "aarch64-linux"))))))
 
   (test-assert "a parent miss retains an available child without rewriting it"
     (let* ((child (fixture "retained-child"))

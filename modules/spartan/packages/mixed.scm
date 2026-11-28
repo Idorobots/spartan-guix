@@ -11,7 +11,9 @@
   #:use-module (guix store)
   #:use-module (guix utils)
   #:use-module (ice-9 match)
+  #:use-module (ice-9 vlist)
   #:use-module (srfi srfi-1)
+  #:use-module (srfi srfi-9)
   #:export (package-with-compilation-system
             map-compilation-package
             make-compilation-package-mapper
@@ -27,19 +29,72 @@
 ;; A fallback bag can reference packages only through its builder gexps (for
 ;; example Linux-PAM's configure flags capture an upstream DocBook file-append).
 ;; Route those references too, but suspend the mapper while lowering each chosen
-;; package: a native hit must retain its entire original graph.  Only another
-;; fallback bag re-enables mapping, in its own native/cross build context.
+;; package: a native hit must retain its entire original graph.  Only scoped
+;; fallback references re-enable mapping in their own native/cross context.
 (define %active-package-mapper (make-parameter #f))
+(define %mapper-cache-id (allocate-store-connection-cache 'native-first-lowering))
+(define %object-cache-id (@@ (guix store) %object-cache-id))
+
+(define (with-package-mapper mapper thunk)
+  ;; Guix 2bc642182 keys its shared object cache by object/system/target/graft?,
+  ;; not by the dynamic compiler context.  Isolate that cache per mapper, also
+  ;; for intermediate file-like objects: a cached file-append/computed-file can
+  ;; otherwise bypass the package compiler completely.  Keep the unmodified
+  ;; context separate and retain nested cache updates when switching back.
+  (define (remember context cache contexts)
+    (vhash-consq context cache (vhash-delq context contexts)))
+  (define (cache-for context contexts)
+    (match (vhash-assq context contexts)
+      ((_ . cache) cache)
+      (#f vlist-null)))
+  (lambda (store)
+    (let* ((previous (%active-package-mapper))
+           (mval (state-parameterize ((%active-package-mapper mapper)) (thunk))))
+      (if (eq? previous mapper)
+          (mval store)
+          (let* ((contexts (remember previous
+                                     (store-connection-cache store %object-cache-id)
+                                     (store-connection-cache store %mapper-cache-id)))
+                 (selected (set-store-connection-cache
+                            (set-store-connection-cache store %mapper-cache-id contexts)
+                            %object-cache-id (cache-for mapper contexts))))
+            (call-with-values
+                (lambda () (mval selected))
+              (lambda (value store)
+                (let ((contexts
+                       (remember mapper
+                                 (store-connection-cache store %object-cache-id)
+                                 (store-connection-cache store %mapper-cache-id))))
+                  (values value
+                          (set-store-connection-cache
+                           (set-store-connection-cache store %mapper-cache-id contexts)
+                           %object-cache-id (cache-for previous contexts)))))))))))
+
 (define %package-compiler
   ((@@ (guix gexp) gexp-compiler-lower) (@@ (guix packages) package-compiler)))
 (define-gexp-compiler fallback-package-compiler (@@ (guix packages) <package>)
   compiler =>
   (lambda (p system target)
     (let ((rewrite (%active-package-mapper)))
-      (state-parameterize ((%active-package-mapper #f))
-        (%package-compiler (if rewrite (rewrite p) p) system target))))
+      (with-package-mapper #f
+        (lambda ()
+          (%package-compiler (if rewrite (rewrite p) p) system target)))))
   expander =>
   ((@@ (guix gexp) gexp-compiler-expand) (@@ (guix packages) package-compiler)))
+
+(define-record-type <fallback-input>
+  (fallback-input mapper object)
+  fallback-input?
+  (mapper fallback-input-mapper)
+  (object fallback-input-object))
+
+(define-gexp-compiler fallback-input-compiler <fallback-input>
+  compiler =>
+  (lambda (input system target)
+    (with-package-mapper (fallback-input-mapper input)
+      (lambda ()
+        (lower-object (fallback-input-object input) system #:target target))))
+  expander => (@@ (guix gexp) default-expander))
 
 (define (map-compilation-package transform package)
   "Apply TRANSFORM to PACKAGE's recipe, retaining any compilation adapters."
@@ -114,7 +169,40 @@ it runs only after the original native-output check misses."
   (define (input x)
     (match x
       ((label (? package? p) outputs ...) (cons* label (rewrite p) outputs))
+      ;; Computed sources/snippets can introduce their own package references.
+      ;; They need the same scoped cache as references in recipe arguments.
+      ((label (? file-like? object) outputs ...)
+       (cons* label (scoped-input object) outputs))
       (_ x)))
+  ;; Scope mapping to references in recipe arguments, not the whole bag builder:
+  ;; build systems can lower their native Guile directly before consuming those
+  ;; arguments.  Its original recipe must not inherit the caller's mapper.
+  (define scoped-input (memoize (lambda (object) (fallback-input rewrite object))))
+  (define (reference object)
+    (cond ((gexp? object) (argument object))
+          ((pair? object) (cons (reference (car object)) (reference (cdr object))))
+          ((file-like? object) (scoped-input object))
+          (else object)))
+  (define (argument object)
+    (cond
+     ((gexp? object)
+      ((@@ (guix gexp) make-gexp)
+       (map (lambda (input)
+              (if (gexp-input? input)
+                  (gexp-input (reference (gexp-input-thing input))
+                              (gexp-input-output input)
+                              #:native? (gexp-input-native? input))
+                  input))
+            ((@@ (guix gexp) gexp-references) object))
+       ((@@ (guix gexp) gexp-self-modules) object)
+       (map reference ((@@ (guix gexp) gexp-self-extensions) object))
+       ((@@ (guix gexp) gexp-proc) object)
+       ((@@ (guix gexp) %gexp-location) object)))
+     ((pair? object) (cons (argument (car object)) (argument (cdr object))))
+     ;; Some build systems also retain SOURCE as a file-like keyword argument.
+     ;; Leave package-valued arguments such as #:guile to the build system.
+     ((and (not (package? object)) (file-like? object)) (scoped-input object))
+     (else object)))
   (define (fallback base system target)
     (let* ((fixed (transform base (gnu-triplet->nix-system (or target system))))
            (bs (package-build-system fixed)))
@@ -125,10 +213,7 @@ it runs only after the original native-output check misses."
             (build-inputs (map input (bag-build-inputs lowered)))
             (host-inputs (map input (bag-host-inputs lowered)))
             (target-inputs (map input (bag-target-inputs lowered)))
-            (build
-             (lambda args
-               (state-parameterize ((%active-package-mapper rewrite))
-                 (apply (bag-build lowered) args)))))))
+            (arguments (argument (bag-arguments lowered))))))
       (package
         (inherit fixed)
         (inputs (map input (package-inputs fixed)))

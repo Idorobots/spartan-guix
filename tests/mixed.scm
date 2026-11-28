@@ -27,6 +27,7 @@
              (spartan packages guile-config)
              (spartan packages guile-snarf)
              (spartan packages mixed)
+             (spartan system build-policy)
              (srfi srfi-1)
              (srfi srfi-64))
 
@@ -195,14 +196,18 @@
         (package-cross-derivation store base "aarch64-linux-gnu"
                                    %system #:graft? #f)))
 
-  (define (collision-free? packages)
+  (define* (collision-free? packages #:optional policy)
     ;; Exercise Guix's real manifest collision check without realizing graft
     ;; prerequisites.  This only lowers derivations; it does not build a profile.
     (parameterize ((%current-system "aarch64-linux")
                    (%current-target-system #f)
                    (%graft? #f))
       (run-with-store store
-        (check-for-collisions (packages->manifest packages) "aarch64-linux"))))
+        (if policy
+            ((@@ (spartan system build-policy) call-with-build-policy) policy
+             (lambda ()
+               (check-for-collisions (packages->manifest packages) "aarch64-linux")))
+            (check-for-collisions (packages->manifest packages) "aarch64-linux")))))
 
   (test-assert "routed Readline propagates its selected Guile's complete library list"
     (parameterize ((%current-system "aarch64-linux") (%current-target-system #f))
@@ -248,8 +253,9 @@
     (every
      (lambda (os)
        (collision-free?
-        (service-value
-         (fold-services (operating-system-services os) #:target-type profile-service-type))))
+         (service-value
+          (fold-services (operating-system-services os) #:target-type profile-service-type))
+         (operating-system-build-policy os)))
      (list rpi3-barebones-os
            (operating-system-for-image (os->image rpi3-barebones-os #:type rpi-image-type)))))
 

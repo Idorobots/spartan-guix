@@ -86,12 +86,14 @@
          (test-assert (string-append system (if cortex? " A53" "") ": fallback profiles are coherent")
            (every
             (lambda (os)
-              (run-with-store store
-                (check-for-collisions
-                 (packages->manifest
-                  (service-value (fold-services (operating-system-services os)
-                                                #:target-type profile-service-type)))
-                 system)))
+               (run-with-store store
+                 ((@@ (spartan system build-policy) call-with-build-policy) policy
+                  (lambda ()
+                    (check-for-collisions
+                     (packages->manifest
+                      (service-value (fold-services (operating-system-services os)
+                                                    #:target-type profile-service-type)))
+                     system)))))
             (list os (operating-system-for-image
                       (os->image os #:type (if (string=? system "armhf-linux")
                                               rpi2-image-type rpi-image-type))))))))))
@@ -125,10 +127,13 @@
 
 (test-assert "Linux-PAM's embedded DocBook reference uses the patched ARM crypto graph"
   (with-store store
-    (let* ((original (derivation-file-name
+    (let* (;; Prime the original DocBook/file-append lowering cache in this store,
+           ;; as unrelated native hits and image tooling can do before the OS.
+           (upstream (package-derivation store linux-pam "armhf-linux" #:graft? #f))
+           (original (derivation-file-name
                       (package-derivation store libgpg-error "armhf-linux" #:graft? #f)))
            (patched (derivation-file-name
-                     (package-derivation store (package-build-fix libgpg-error "armhf-linux")
+                     (package-derivation store (build-policy-package %rpi2-build-policy libgpg-error)
                                          "armhf-linux" #:graft? #f)))
            (seen (make-hash-table)))
       (define (visit drv)
@@ -142,6 +147,18 @@
                  (lower-object (build-policy-package %rpi2-build-policy linux-pam)
                                "armhf-linux" #:target #f))))
       (and (hash-ref seen patched) (not (hash-ref seen original))))))
+
+(test-assert "fallback lowering cannot poison the original ARM Linux-PAM candidate"
+  (let ((expected (with-store original-store
+                    (derivation-file-name
+                     (package-derivation original-store linux-pam "armhf-linux" #:graft? #f)))))
+    (with-store store
+      (parameterize ((%graft? #f))
+        (package-derivation store (build-policy-package %rpi2-build-policy linux-pam)
+                            "armhf-linux" #:graft? #f)
+        (string=? expected
+                  (derivation-file-name
+                   (package-derivation store linux-pam "armhf-linux" #:graft? #f)))))))
 
 (define runner (test-runner-current))
 (test-end "policy-runtime")

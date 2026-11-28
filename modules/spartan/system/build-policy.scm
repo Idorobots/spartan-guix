@@ -202,6 +202,16 @@ Reapplying a policy replaces the old policy rather than composing board fixes."
 ;; importing Raspberry Pi definitions cannot change an ordinary x86 image.
 (define %active-build-policy (make-parameter #f))
 (define %build-role (make-parameter 'runtime))
+(define policy-cache-context
+  ;; A distinct identity mapper namespaces raw service/file-like references
+  ;; before the OS dispatcher sees them.  Recipe lowering then switches back to
+  ;; the unmodified context or to its own fallback mapper as appropriate.
+  (memoize (lambda (policy) (lambda (p) p))))
+(define (call-with-build-policy policy thunk)
+  ((@@ (spartan packages mixed) with-package-mapper)
+   (policy-cache-context policy)
+   (lambda ()
+     (state-parameterize ((%active-build-policy policy)) (thunk)))))
 (define %package-compiler ((@@ (guix gexp) lookup-compiler) guix))
 (define %package-expander ((@@ (guix gexp) lookup-expander) guix))
 (define %os-compiler
@@ -235,10 +245,10 @@ Reapplying a policy replaces the old policy rather than composing board fixes."
   (lambda (os system target)
     (let ((policy (operating-system-build-policy os)))
       (if policy
-          (state-with-parameters
-           (list %active-build-policy %build-role)
-           (list policy 'runtime)
-           (%os-compiler os (build-policy-system policy) #f))
+          (call-with-build-policy policy
+            (lambda ()
+              (state-parameterize ((%build-role 'runtime))
+                (%os-compiler os (build-policy-system policy) #f))))
           (%os-compiler os system target))))
   expander => (@@ (guix gexp) default-expander))
 
@@ -248,11 +258,12 @@ Reapplying a policy replaces the old policy rather than composing board fixes."
 (define (policy-operating-system-derivation os)
   (let ((policy (operating-system-build-policy os)))
     (if policy
-        (state-parameterize ((%active-build-policy policy)
-                            (%build-role 'runtime)
-                            (%current-system (build-policy-system policy))
-                            (%current-target-system #f))
-          (original-operating-system-derivation os))
+        (call-with-build-policy policy
+          (lambda ()
+            (state-parameterize ((%build-role 'runtime)
+                                (%current-system (build-policy-system policy))
+                                (%current-target-system #f))
+              (original-operating-system-derivation os))))
         (original-operating-system-derivation os))))
 
 (module-set! (resolve-module '(gnu system)) 'operating-system-derivation

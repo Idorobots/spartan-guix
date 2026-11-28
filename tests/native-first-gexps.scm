@@ -1,4 +1,5 @@
-(use-modules (guix build-system trivial)
+(use-modules (guix build-system)
+             (guix build-system trivial)
              (guix derivations)
              (guix gexp)
              (guix packages)
@@ -15,6 +16,22 @@
     (arguments (list #:builder #~(mkdir #$output)))
     (home-page "https://example.org") (synopsis "Gexp routing fixture")
     (description "Derivation-only native-first gexp routing fixture.") (license #f)))
+
+;; Like GNU/TeX Live, retain SOURCE as a keyword argument and only turn it into
+;; a gexp reference during the bag's build step, after the mapper has run.
+(define source-argument-build-system
+  (build-system
+    (name 'source-argument)
+    (description "File-like argument routing fixture")
+    (lower
+     (lambda* (name #:key source system #:allow-other-keys)
+       (bag
+         (name name) (system system)
+         (arguments (list #:source source))
+         (build
+          (lambda* (name inputs #:key source system #:allow-other-keys)
+            (gexp->derivation name #~(begin #$source (mkdir #$output))
+                              #:system system #:graft? #f))))))))
 
 (test-begin "native-first-gexps")
 
@@ -63,6 +80,93 @@
                   (test-assert (string-append suffix ": native reference uses its own context")
                     (member (derivation-file-name native) inputs))))))))
       '(#f #t)))
+   '(#f #t))
+
+  (for-each
+   (lambda (original-first?)
+     (let* ((suffix (if original-first? "original-first" "fallback-first"))
+            (child (fixture (string-append "cached-child-" suffix)))
+            (fixed (package (inherit child)
+                     (name (string-append "fixed-" (package-name child)))))
+            (reference (file-append child "/payload"))
+            (parent (package (inherit (fixture (string-append "cached-parent-" suffix)))
+                      (arguments (list #:builder
+                                       #~(begin #$reference (mkdir #$output))))))
+            (upstream (with-store original-store
+                        (package-derivation original-store parent "x86_64-linux" #:graft? #f))))
+       (parameterize ((available? (const #f)))
+         (call-with-values
+             (lambda ()
+               (make-native-first-package-mapper
+                (lambda (p system) (if (eq? p child) fixed p))))
+           (lambda (rewrite owns?)
+             (when original-first?
+               (package-derivation store parent "x86_64-linux" #:graft? #f))
+             (let* ((selected (package-derivation store (rewrite parent) "x86_64-linux"
+                                                  #:graft? #f))
+                    (ordinary (package-derivation store parent "x86_64-linux" #:graft? #f))
+                    (expected (package-derivation store fixed "x86_64-linux" #:graft? #f)))
+               (test-assert (string-append suffix ": fallback ignores original lowering cache entries")
+                 (member (derivation-file-name expected)
+                         (map derivation-input-path (derivation-inputs selected))))
+               (test-equal (string-append suffix ": original lowering ignores fallback cache entries")
+                 (derivation-file-name upstream) (derivation-file-name ordinary))))))))
+   '(#t #f))
+
+  (test-assert "different fallback mappers do not share cached file-like lowering"
+    (let* ((child (fixture "shared-policy-child"))
+           (reference (file-append child "/payload"))
+           (parent (package (inherit (fixture "shared-policy-parent"))
+                     (arguments (list #:builder #~(begin #$reference (mkdir #$output)))))))
+      (parameterize ((available? (const #f)))
+        (every
+         (lambda (name)
+           (let ((fixed (package (inherit child) (name name))))
+             (call-with-values
+                 (lambda ()
+                   (make-native-first-package-mapper
+                    (lambda (p system) (if (eq? p child) fixed p))))
+               (lambda (rewrite owns?)
+                 (let ((selected (package-derivation store (rewrite parent) "x86_64-linux"
+                                                    #:graft? #f))
+                       (expected (package-derivation store fixed "x86_64-linux" #:graft? #f)))
+                   (member (derivation-file-name expected)
+                           (map derivation-input-path (derivation-inputs selected))))))))
+         '("first-policy-child" "second-policy-child")))))
+
+  (for-each
+   (lambda (source-argument?)
+     (test-assert (if source-argument?
+                      "file-like source arguments route hidden packages despite a primed cache"
+                      "computed source inputs route hidden packages despite a primed cache")
+       (let* ((child (fixture "source-only-child"))
+              (fixed (package (inherit child) (name "fixed-source-only-child")))
+              (source (computed-file "source-only-reference"
+                        #~(begin #$(file-append child "/payload") (mkdir #$output))))
+              (parent (package (inherit (fixture "source-only-parent"))
+                        (source source)
+                        (build-system (if source-argument? source-argument-build-system
+                                          trivial-build-system)))))
+         (parameterize ((available? (const #f)))
+           (package-derivation store parent "x86_64-linux" #:graft? #f)
+           (call-with-values
+               (lambda ()
+                 (make-native-first-package-mapper
+                  (lambda (p system) (if (eq? p child) fixed p))))
+             (lambda (rewrite owns?)
+               (let* ((selected (package-derivation store (rewrite parent) "x86_64-linux"
+                                                    #:graft? #f))
+                      (expected (derivation-file-name
+                                 (package-derivation store fixed "x86_64-linux" #:graft? #f)))
+                      (generated
+                       (find (lambda (input)
+                               (string-suffix? "-source-only-reference.drv"
+                                               (derivation-input-path input)))
+                             (derivation-inputs selected))))
+                 (and generated
+                      (member expected
+                              (map derivation-input-path
+                                   (derivation-inputs (derivation-input-derivation generated))))))))))))
    '(#f #t))
 
   (test-assert "a native hit inside a fallback gexp retains its entire hidden graph"

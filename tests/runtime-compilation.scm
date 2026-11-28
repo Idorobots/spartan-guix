@@ -131,11 +131,14 @@
   (define (collision-free? os)
     (parameterize ((%current-system "armhf-linux") (%current-target-system #f) (%graft? #f))
       (run-with-store store
-        (check-for-collisions
-         (packages->manifest
-          (service-value (fold-services (operating-system-services os)
-                                        #:target-type profile-service-type)))
-         "armhf-linux"))))
+        ((@@ (spartan system build-policy) call-with-build-policy)
+         (operating-system-build-policy os)
+         (lambda ()
+           (check-for-collisions
+            (packages->manifest
+             (service-value (fold-services (operating-system-services os)
+                                           #:target-type profile-service-type)))
+            "armhf-linux"))))))
   (test-assert "Pi 2 base profiles have consistent propagated libraries"
     (every collision-free? pi2-systems))
   (test-assert "actual ARMHF Guile/Shepherd/kernel derivations execute on the selected runner"
