@@ -419,8 +419,9 @@ available in =(spartan bootloader raspberrypi)= for custom image initializers.
 | =rpi-image-type= | Discoverable as =rpi-raw= in an installed channel. |
 | =%rpi-root-file-system=, =%rpi-boot-file-system= | Shared root/boot declarations. |
 | =%rpi-resize-file-system-service= | Root partition/filesystem growth at boot. |
-| =rpi3-package=, =rpi3-guile-fixes= | Pi 3 package adaptation and its Guile transformations. |
-| =rpi2-package=, =rpi4-package= | SDK-only mixed compilation for ARM hard float and AArch64 respectively. |
+| =rpi4-barebones-os=, =rpi4-barebones-raw-image=, =rpi4-image-type= | Non-A53 AArch64 Pi 4 system and =rpi4-raw= image type. |
+| =%rpi2-build-policy=, =%rpi3-build-policy=, =%rpi4-build-policy= | Explicit board build policies. |
+| =make-raspberry-pi-build-policy= | Select the output/build systems, A53 fix and additional mixed packages. |
 
 Build the Pi 3 SD image using the installed channel's =rpi-raw= image type:
 
@@ -439,10 +440,47 @@ guix system image --system=armhf-linux --image-type=rpi2-raw \
 Both systems include =linux-firmware-uncompressed= and =%base-firmware=,
 including =wireless-regdb=. Pi 3 also includes =rpi3-bluetooth-firmware=.
 Supply Wi-Fi credentials, radio services and host-specific
-provisioning in the consuming configuration. For added Guile-dependent packages,
-import =(gnu system images raspberrypi)= and =(gnu packages guile)=, then use
-the helper, e.g. =(rpi3-package guile-readline)=. Image construction and hardware
-boot are separate deployment steps.
+provisioning in the consuming configuration. Pi 4 uses the same kernel with
+=rpi4-bluetooth-firmware=. Image construction and hardware boot are separate
+deployment steps.
+
+*** Opt-in build policy
+
+The baselines explicitly select a policy from =(spartan system build-policy)=.
+Image assembly, including Guile, filesystem tools, =genimage= and QEMU, runs on
+the build host. The embedded OS remains a native target graph: ordinary ARM
+packages need target execution through a native builder, offloading or emulation.
+The kernel, uncompressed firmware, both Guile versions, Shepherd, Guile-SSH,
+Guile-Readline, sudo and explicitly added packages select cross-build roots.
+
+Extend a host after adding its services:
+
+#+begin_src scheme
+(use-modules (gnu system images raspberrypi) (spartan system build-policy))
+(with-build-policy my-pi-os
+  (make-raspberry-pi-build-policy
+   #:system "armhf-linux"
+   #:mixed-packages (list nut)))
+#+end_src
+
+Use =#:system "aarch64-linux"= with =#:cortex-a53? #t= for Pi 3, and leave
+=#:cortex-a53?= false for Pi 4. =#:build-system= defaults to the runner's native
+Guix platform, independently of the command's =--system=. Replacing a policy
+on an inherited OS replaces the previous board selection, without stacking it.
+
+The policy checks exact native outputs before applying source-build fallbacks.
+A hit preserves the candidate's whole dependency graph. A miss lazily fixes and
+maps explicit/implicit dependencies in their actual compilation context. Required
+runtime changes, including the A53 workaround, are part of the candidate being
+checked. All declared outputs must be local or substitutable. Decisions are
+memoized for the invocation; query errors propagate. Checks use a separate daemon
+connection with daemon defaults, not command-specific substitute URL/options.
+
+Plain x86-on-x86 systems need no policy. Importing the Pi modules leaves their
+packages and images on Guix's original derivations. Generic configurations may
+explicitly use =make-build-policy= and import =(spartan system image)= for
+host-side disk assembly. The pinned-Guix integration delegates unchanged for OS
+objects without a policy and never rebinds upstream image-tool packages.
 
 ** Package helpers
 
@@ -499,11 +537,9 @@ adapted package.
 (with-guile-sdk guile-readline)
 #+end_src
 
-The Pi 2, Pi 3 and Pi 4 baselines use this same mechanism for both Guile
-versions and the base mixed-compilation packages. The Pi 2 and Pi 4 select
-the SDK-only fixes; the Pi 3 also selects its Cortex-A53 linker fix. Board helpers
-accept an optional =#:system= compilation-platform override. Kernels and
-uncompressed firmware use the compilation adapter directly.
+The Pi policies compose this mechanism with lazy source-build fallbacks. Pi 2
+and Pi 4 select SDK-only fixes; Pi 3 also selects its Cortex-A53 linker fix.
+The policies include kernels and uncompressed firmware in the mixed package set.
 
 Dependency helpers apply the named compatibility variants to a package's
 dependencies. Import the module and call the helper with a package:

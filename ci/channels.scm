@@ -1,6 +1,8 @@
 ;; Run with `guix repl ci/channels.scm` to emit a pure-data channel file for
 ;; Guix's isolated loader. The committed checkout supplies the channel under
-;; test, including PR merge commits; no remote publication is needed.
+;; test, including PR merge commits; no remote publication is needed. The CI
+;; workflow exposes the exact commit as refs/heads/guix-ci so Guix can fetch it
+;; even when actions/checkout leaves HEAD detached.
 (use-modules (guix channels) (ice-9 pretty-print))
 
 (let* ((root (dirname (dirname (canonicalize-path (current-filename)))))
@@ -12,7 +14,7 @@
                  (list (channel
                         (name 'spartan-guix)
                         (url (string-append "file://" root))
-                        (branch "main")
+                        (branch "guix-ci")
                         (commit commit))
                        ;; Select CI's Guix version here. Runtime dependencies
                        ;; such as Nonguix are resolved from .guix-channel, whose

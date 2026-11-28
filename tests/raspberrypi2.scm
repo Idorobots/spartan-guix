@@ -11,6 +11,7 @@
              (spartan packages firmware)
              (spartan packages mixed)
              (spartan packages raspberrypi)
+             (spartan system build-policy)
              (srfi srfi-1)
              (srfi srfi-64))
 
@@ -59,7 +60,7 @@
    (lambda (os)
      (let* ((kernel (operating-system-kernel os))
             (source (package-source kernel)))
-       (and (eq? kernel (package-with-compilation-system linux-rpi2))
+       (and (eq? kernel (build-policy-package %rpi2-build-policy linux-rpi2))
             (string-prefix? "mirror://kernel.org/linux/kernel/" (origin-uri source))
             (not (origin-snippet source)))))
    (list rpi2-barebones-os converted)))
@@ -67,8 +68,10 @@
 (test-assert "Pi 2 retains loadable uncompressed runtime firmware after image conversion"
   (every
    (lambda (os)
-     (every (lambda (firmware) (memq firmware (operating-system-firmware os)))
-            (cons (package-with-compilation-system linux-firmware-uncompressed)
+     (every (lambda (firmware)
+              (memq (build-policy-package %rpi2-build-policy firmware)
+                    (operating-system-firmware os)))
+            (cons linux-firmware-uncompressed
                   %base-firmware)))
    (list rpi2-barebones-os converted)))
 

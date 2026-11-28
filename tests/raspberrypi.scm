@@ -16,6 +16,7 @@
              (spartan bootloader raspberrypi)
              (spartan packages firmware)
              (spartan packages mixed)
+             (spartan system build-policy)
              (spartan services file-systems)
              (srfi srfi-1)
              (srfi srfi-64))
@@ -34,8 +35,9 @@
   (find (lambda (value) (eq? (service-kind value) type))
         (operating-system-user-services os)))
 
-(test-equal "barebones OS adds only DHCP, reference NTP and resizing to base services"
-  (append (list dhcpcd-service-type ntp-service-type
+(test-equal "barebones OS adds a build policy, DHCP, reference NTP and resizing"
+  (append (list (@@ (spartan system build-policy) build-policy-service-type)
+                dhcpcd-service-type ntp-service-type
                 resize-file-system-service-type)
           (map service-kind %base-services))
   (map service-kind (operating-system-user-services rpi3-barebones-os)))
@@ -178,7 +180,7 @@
   (every (lambda (system)
            (let ((arguments (operating-system-user-kernel-arguments system)))
              (and (eq? (operating-system-kernel system)
-                       (package-with-compilation-system linux-arm64-generic))
+                       (build-policy-package %rpi3-build-policy linux-arm64-generic))
                   (member "brcmfmac.feature_disable=0x2000" arguments)
                   (every (lambda (argument) (member argument arguments))
                          %default-kernel-arguments))))
@@ -187,9 +189,10 @@
 (test-assert "radio firmware and signed regulatory database survive image conversion"
   (every (lambda (system)
            (let ((firmware (operating-system-firmware system)))
-             (and (not (memq linux-firmware firmware))
-                  (every (lambda (package) (memq package firmware))
-                         (cons* (package-with-compilation-system linux-firmware-uncompressed)
+             (and (not (any (lambda (p) (string=? (package-name p) "linux-firmware")) firmware))
+                  (every (lambda (package)
+                           (memq (build-policy-package %rpi3-build-policy package) firmware))
+                         (cons* linux-firmware-uncompressed
                                 rpi3-bluetooth-firmware
                                 wireless-regdb %base-firmware)))))
          (list rpi3-barebones-os converted)))

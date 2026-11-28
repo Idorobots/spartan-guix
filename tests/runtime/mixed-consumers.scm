@@ -8,11 +8,12 @@
              (guix gexp)
              (guix monads)
              (guix store)
+             (spartan system build-policy)
              (ice-9 textual-ports))
 
-(define shepherd (rpi3-package shepherd-1.0))
-(define ssh (rpi3-package guile-ssh))
-(define guile (rpi3-package guile-3.0))
+(define shepherd (build-policy-package %rpi3-build-policy shepherd-1.0))
+(define ssh (build-policy-package %rpi3-build-policy guile-ssh))
+(define guile (build-policy-package %rpi3-build-policy guile-3.0))
 
 (with-store store
   (let ((drv

@@ -7,11 +7,12 @@
              (guix gexp)
              (guix monads)
              (guix store)
+             (spartan system build-policy)
              (ice-9 textual-ports))
 
-(define zlib (rpi3-package guile-zlib))
-(define guile-3.0/rpi3 (rpi3-package guile-3.0))
-(define guile-3.0-latest/rpi3 (rpi3-package guile-3.0-latest))
+(define zlib (build-policy-package %rpi3-build-policy guile-zlib))
+(define guile-3.0/rpi3 (build-policy-package %rpi3-build-policy guile-3.0))
+(define guile-3.0-latest/rpi3 (build-policy-package %rpi3-build-policy guile-3.0-latest))
 
 (define zlib-check
   '(begin

@@ -1,4 +1,6 @@
 *.log
 *.go
+# Go source fixtures, rather than compiled Guile modules.
+!tests/runtime/go-cross/**/*.go
 channels-ci.scm
 pi3-barebones-image

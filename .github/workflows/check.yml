@@ -29,10 +29,13 @@ jobs:
         with:
           pullAfterInstall: false
       - name: Generate the exact-commit CI channel list
-        run: guix repl ci/channels.scm > channels-ci.scm
+        run: |
+          # Guix fetches branch refs, so expose PR merge commits from detached HEAD.
+          git update-ref refs/heads/guix-ci "$GITHUB_SHA"
+          guix repl ci/channels.scm > channels-ci.scm
       - name: Bootstrap pinned dependencies and this exact channel commit
         run: guix time-machine -C channels-ci.scm -- describe -f channels
       - name: Run filesystem service and Raspberry Pi regression tests
         run: make check GUIX='guix time-machine -C channels-ci.scm --'
-      - name: Dry-run AArch64 mixed-compilation image and named discovery
+      - name: Dry-run ARM hard-float, A53 and non-A53 images and named discovery
         run: make check-image check-discovery GUIX='guix time-machine -C channels-ci.scm --'
